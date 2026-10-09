@@ -102,9 +102,9 @@ def main():
         bf16=True,
         # Recompute activations in the backward pass instead of storing them.
         # Costs ~30% more compute for a large drop in activation memory, which is
-        # what makes an 8B model + 4096-token examples fit on a 24GB card.
+        # what makes an 8B model + 8192-token examples fit on an A40 (48GB).
         gradient_checkpointing=True,
-        max_length=4096,
+        max_length=8192,
         packing=False,
         assistant_only_loss=True,
         report_to="none",

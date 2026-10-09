@@ -6,6 +6,7 @@ user (the transcript + metadata, built by build_model_input), assistant
 
 Run AFTER the TODO(human) below is filled in.
 """
+import argparse
 import json
 import os
 import random
@@ -17,9 +18,11 @@ VAL_PATH = os.path.join(HERE, "val.jsonl")
 VAL_FRACTION = 0.08
 SEED = 13
 
-# Longest transcripts are ~29k chars (~7k tokens). We cap the transcript so every
-# training example fits a 4096-token context. 12k chars is a safe round number.
-MAX_TRANSCRIPT_CHARS = 12000
+# Longest transcripts are ~29k chars (~7k tokens). The old 12k-char cap was cutting
+# the tail off the longest calls (23/144 in the eval set). Qwen3's context is far
+# larger, so let the whole transcript through; train.py's max_length is the real
+# ceiling and is set to match (8192 tokens).
+MAX_TRANSCRIPT_CHARS = 30000
 
 # Outlier targets: a handful of the 305 summaries ramble (long + full of
 # negation-filler like "no competing vendors", "not discussed"). Training on
@@ -135,12 +138,26 @@ def to_example(record):
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--holdout", default=None,
+                    help="JSON file with a 'call_ids' list to exclude from training "
+                         "(e.g. ../call-summarizer/eval/EVAL_FROZEN.json)")
+    args = ap.parse_args()
+
     records = json.load(open(RAW_PATH, encoding="utf-8"))
     records = [r for r in records if r.get("target_summary") and r.get("segments")]
     before = len(records)
     records = [r for r in records if _is_clean(r)]
     print(f"usable records: {before} | after outlier filter: {len(records)} "
           f"(dropped {before - len(records)})")
+
+    # Hold out the frozen eval calls so the model is never scored on a call it
+    # trained on. Without this, ROUGE measures memorization, not summarization.
+    if args.holdout and os.path.exists(args.holdout):
+        holdout = set(json.load(open(args.holdout, encoding="utf-8"))["call_ids"])
+        dropped = [r for r in records if r["call_id"] in holdout]
+        records = [r for r in records if r["call_id"] not in holdout]
+        print(f"held out {len(dropped)} frozen eval calls; {len(records)} remain for training")
 
     rng = random.Random(SEED)
     rng.shuffle(records)
