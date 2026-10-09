@@ -18,3 +18,11 @@ Thumbs.db
 # Eval artifacts that embed customer transcripts/summaries
 eval/eval_set.jsonl
 eval/scores.json
+
+# Dataset + fine-tune artifacts that embed customer transcripts/summaries
+finetune/dataset_raw.json
+finetune/train.jsonl
+finetune/val.jsonl
+finetune/qwen3-*-lora/
+*.safetensors
+output*/
