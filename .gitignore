@@ -1,0 +1,20 @@
+# Secrets -- never commit
+.env
+.env.*
+
+# Local environment
+.venv/
+__pycache__/
+*.pyc
+
+# Real customer data -- never commit. Transcripts and summaries stay local.
+data/*
+!data/.gitkeep
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Eval artifacts that embed customer transcripts/summaries
+eval/eval_set.jsonl
+eval/scores.json
