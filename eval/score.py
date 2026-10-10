@@ -28,7 +28,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 METRICS = ["rouge1", "rouge2", "rougeL"]
 BOOTSTRAP = 2000
 # the text each variant actually read, for a meaningful copy_rate
-COPY_CORPUS = {"qwen8b_lora": "model_input", "bart": "cleaned_transcript"}
+COPY_CORPUS = {
+    "qwen8b_lora": "model_input",
+    "qwen8b_honest": "model_input",
+    "qwen4b": "model_input",
+    "bart": "cleaned_transcript",
+}
 
 # magnitude suffixes matter: "$84K" and "84000" are the same figure, and flagging
 # the second as invented would make the fabrication number useless. Percentages are

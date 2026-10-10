@@ -8,13 +8,14 @@ directly instead of emitting a <think> block first.
 """
 import argparse
 import json
+import os
 import time
 
 import torch
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-BASE_MODEL = "Qwen/Qwen3-8B"
+BASE_MODEL = os.environ.get("BASE_MODEL", "Qwen/Qwen3-8B")
 
 
 def load(args):

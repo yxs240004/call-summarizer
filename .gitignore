@@ -23,6 +23,8 @@ eval/scores.json
 finetune/dataset_raw.json
 finetune/train.jsonl
 finetune/val.jsonl
+finetune/infer_input.jsonl
+finetune/results*.jsonl
 finetune/qwen3-*-lora/
 *.safetensors
 output*/
