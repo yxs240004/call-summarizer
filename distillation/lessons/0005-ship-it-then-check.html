@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 05 — Ship it, then check</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+/* Figure-local classes. Colours come from lesson.css tokens, so both themes work. */
+.fig{ margin:1.9rem 0 }
+.fig svg{ display:block; width:100%; height:auto; max-width:100% }
+.c-box{ fill:var(--surface-2); stroke:var(--rule-2); stroke-width:1 }
+.c-box--fail{ fill:var(--stop-soft); stroke:var(--stop); stroke-width:1.4 }
+.c-stage{ fill:var(--ink); font-family:var(--mono); font-size:10.5px; text-anchor:middle }
+.c-rep{ fill:var(--accent); font-family:var(--mono); font-size:9.5px; text-anchor:middle; font-weight:600 }
+.c-rep--fail{ fill:var(--stop) }
+.c-chk{ fill:var(--muted); font-family:var(--mono); font-size:9.5px; text-anchor:middle }
+.c-flow{ stroke:var(--rule-2); stroke-width:1.2; fill:none }
+.c-arrow{ fill:var(--rule-2) }
+.c-note{ fill:var(--ink-soft); font-family:var(--display); font-size:11px; text-anchor:middle }
+</style>
+</head>
+<body>
+<main class="lesson">
+
+  <p class="eyebrow">Lesson 05 &middot; <a href="../MISSION.md">Distillation</a></p>
+
+  <h1>Ship it, then check <span class="sub">Five numbers that were reported fields rather than measurements &mdash; and the control that finally separates precision from the engine.</span></h1>
+
+  <p class="lede">
+    Every check in the deployment chain reported success, and the model returned HTTP 500 on
+    its first request. That is not bad luck; it is what a check that cannot fail looks like.
+    This lesson is about the difference between a tool telling you a number and a tool telling
+    you something true &mdash; and about the one experiment that turned this project's last
+    open question into a measurement.
+  </p>
+
+  <h2><span class="num">01</span>The chain that ended at &ldquo;created&rdquo;</h2>
+
+  <p>
+    Qwen3.5-2B carries a one-layer <em>multi-token-prediction</em> head. The merge step dropped
+    it &mdash; correctly, because nothing trained that head toward summarization and 4-bit
+    decoding never touches it &mdash; and reported the drop. But the converter computes the
+    block count as <code>num_hidden_layers + mtp_num_hidden_layers</code>, and this
+    checkpoint's config does not name its text model at the top level, so the converter never
+    learned the head was gone. It wrote metadata declaring <strong>25 blocks</strong>. The
+    merge had written <strong>24</strong>.
+  </p>
+
+  <p>
+    Then four tools reported success in a row.
+  </p>
+
+  <figure class="fig">
+    <svg viewBox="0 0 640 190" role="img" aria-label="Five deployment stages in a row. The first four, merge, convert, quantize and create, each report a green success while verifying only their own local output. The fifth, the first token, fails with HTTP 500 because the metadata describes 25 blocks and the file holds 24. No stage in the chain builds a compute graph, so none can detect the inconsistency.">
+      <g>
+        <rect class="c-box" x="16" y="58" width="108" height="38" rx="3"></rect>
+        <text class="c-stage" x="70" y="81">merge</text>
+        <text class="c-rep" x="70" y="44">ok</text>
+        <text class="c-chk" x="70" y="112">dropped mtp</text>
+      </g>
+      <g>
+        <rect class="c-box" x="141" y="58" width="108" height="38" rx="3"></rect>
+        <text class="c-stage" x="195" y="81">convert</text>
+        <text class="c-rep" x="195" y="44">wrote GGUF</text>
+        <text class="c-chk" x="195" y="112">blk.24 written</text>
+      </g>
+      <g>
+        <rect class="c-box" x="266" y="58" width="108" height="38" rx="3"></rect>
+        <text class="c-stage" x="320" y="81">quantize</text>
+        <text class="c-rep" x="320" y="44">320/320</text>
+        <text class="c-chk" x="320" y="112">tensors present</text>
+      </g>
+      <g>
+        <rect class="c-box" x="391" y="58" width="108" height="38" rx="3"></rect>
+        <text class="c-stage" x="445" y="81">create</text>
+        <text class="c-rep" x="445" y="44">success</text>
+        <text class="c-chk" x="445" y="112">copied metadata</text>
+      </g>
+      <g>
+        <rect class="c-box--fail" x="516" y="58" width="108" height="38" rx="3"></rect>
+        <text class="c-stage" x="570" y="81">first token</text>
+        <text class="c-rep--fail" x="570" y="44">HTTP 500</text>
+        <text class="c-chk" x="570" y="112">blk.24 missing</text>
+      </g>
+      <line class="c-flow" x1="126" y1="77" x2="138" y2="77"></line>
+      <polygon class="c-arrow" points="141,77 134,74 134,80"></polygon>
+      <line class="c-flow" x1="251" y1="77" x2="263" y2="77"></line>
+      <polygon class="c-arrow" points="266,77 259,74 259,80"></polygon>
+      <line class="c-flow" x1="376" y1="77" x2="388" y2="77"></line>
+      <polygon class="c-arrow" points="391,77 384,74 384,80"></polygon>
+      <line class="c-flow" x1="501" y1="77" x2="513" y2="77"></line>
+      <polygon class="c-arrow" points="516,77 509,74 509,80"></polygon>
+      <text class="c-note" x="320" y="142">Each stage verifies the file it just wrote. None builds a compute graph,</text>
+      <text class="c-note" x="320" y="158">so the inconsistency is invisible until <tspan font-family="IBM Plex Mono, monospace" font-size="10">llm_load_tensors</tspan>.</text>
+    </svg>
+    <figcaption>
+      Four successful reports, one failure. The missing tensor is not hidden in the data &mdash;
+      it is hidden in the gap between what each tool checks and what the pipeline needs to be
+      true.
+    </figcaption>
+  </figure>
+
+  <p>
+    The first real request returned <code>check_tensor_dims: tensor 'blk.24.attn_norm.weight'
+    not found</code>. Neither <code>llama-quantize</code> nor <code>ollama create</code> could
+    have caught it: the first walks the tensors that are <em>in</em> the file and never asks
+    whether the metadata implies more, and the second copies a blob and reads its header.
+    <strong>A load failure is invisible from the GGUF side.</strong> The fix was to stop
+    declaring the block at all &mdash; and the lesson is that the drop was already
+    <em>reported</em> at merge time; reporting it turned out not to be the same as acting on it
+    downstream.
+  </p>
+
+  <h2><span class="num">02</span>Five checks that passed for the wrong reason</h2>
+
+  <p>
+    That was not the first time. Reading the build record end to end, the same shape appears
+    five times: a number or a verdict that is true, produced by something that could not have
+    known whether it was true.
+  </p>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>The check</th><th>What it reported</th><th>What it actually established</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Ollama's chat template</td>
+          <td>the model ran</td>
+          <td>that a Go template parsed &mdash; not that the prompt matched the Jinja the student was trained on</td>
+        </tr>
+        <tr>
+          <td>GGUF conversion metadata</td>
+          <td>success; 320/320 tensors; 5.37 BPW</td>
+          <td>that the tensors present are quantizable &mdash; not that the header describes the same model</td>
+        </tr>
+        <tr>
+          <td><code>verify_merged.py</code></td>
+          <td>mismatch</td>
+          <td>that bf16 rounds differently from exact arithmetic &mdash; at a resolution the format cannot hold</td>
+        </tr>
+        <tr>
+          <td><code>measure_local.py</code> prefill</td>
+          <td>10,000+ tok/s</td>
+          <td>that Ollama had already seen this exact prompt, so nothing was prefilled at all</td>
+        </tr>
+        <tr>
+          <td><code>verify_quant.py</code> prefix agreement</td>
+          <td>FAIL, 0.0251 against a 0.3215 floor</td>
+          <td>that one early argmax flip rewrote the decode trajectory &mdash; not that quality fell</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    The middle row is the one worth pausing on, because its repair is the model for the rest.
+    The old merge check compared greedy token ids <em>exactly</em> between the adapter and the
+    merged checkpoint. Those two are equal in exact arithmetic and different in bf16, so one
+    position where the top two logits sit within a rounding step flips the token and rewrites
+    the context for every token after it. The test was not wrong about its measurement; it
+    demanded a resolution the arithmetic does not have. The rewrite is teacher-forced and reads
+    its result against a <strong>measured floor</strong> &mdash; the same forward pass twice,
+    which came back bit-identical at <strong>exactly 0.0</strong>. Against that floor the real
+    effect is small and legible: KL ~2&times;10<sup>&minus;3</sup>, same token chosen at
+    98.5% of positions, and every mismatch sitting at a reference margin of 0.00000, 0.0625,
+    0.125 or 0.25 &mdash; precisely bf16 ULPs at that logit magnitude.
+  </p>
+
+  <div class="note">
+    <span class="note__label">The pattern</span>
+    <p>
+      A check needs three things: something it could fail <em>for</em>, a floor it can be read
+      against, and a reason to believe the floor is about the quantity you care about. Miss any
+      one and you get a number that is arithmetically correct and answers the wrong question.
+      When a reported field implies something the hardware cannot do &mdash; 10,000 tok/s of
+      prefill on a CPU &mdash; the field is wrong, not the hardware.
+    </p>
+  </div>
+
+  <h2><span class="num">03</span>The number that was missing</h2>
+
+  <p>
+    All of that checking left the mission's actual question unanswered. Step 5 measured the
+    <em>16-bit adapter's</em> quality; step 6 measured the <em>quantized file's</em> speed. The
+    artifact that would ship had a measured latency and no measured quality at all. So the
+    deployed model's 144 summaries were scored the same way as everything else &mdash; same
+    calls, same references, same scorer, so the number is comparable rather than merely
+    plausible.
+  </p>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Variant</th><th>ROUGE-1</th><th>95% CI</th><th>words</th><th>ungrounded names</th><th>calls with any</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>student_q4km</code> &mdash; <em>the shipped artifact</em></td><td>0.428</td><td>[0.410, 0.446]</td><td>108.0</td><td>37</td><td>26 / 144</td></tr>
+        <tr><td><code>student_blend</code> &mdash; 16-bit</td><td>0.440</td><td>[0.420, 0.458]</td><td>141.2</td><td>46</td><td>30 / 144</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    Paired, the gap is <strong>+0.0114 [+0.0001, +0.0230]</strong> and real on all three ROUGE
+    variants. Real by a whisker: the lower bound sits at +0.0001, so this is a difference 144
+    calls can <em>just</em> resolve, and one more bad call could erase it. That is worth saying
+    plainly rather than rounding up to &ldquo;significantly worse.&rdquo;
+  </p>
+
+  <p>
+    The interesting part is not the size of the gap but its <em>shape</em>, and the shape is
+    only visible if you look at the distribution instead of the total. The control arm &mdash;
+    the deliberately mis-trained arm from
+    <a href="0003-reading-a-loss-curve.html">Lesson 03</a> &mdash; also had a bad ungrounded-name
+    count, 512 of them. But 443 of those came from a <strong>single</strong> runaway call, 86%
+    of the arm's whole total. The deployed model's 37 are spread over <strong>26 of 144
+    calls</strong>, almost all of them singletons, with the worst call contributing 4. Same-
+    looking aggregate, opposite kind of failure: one is an outlier to filter, the other is a
+    drift to fix.
+  </p>
+
+  <p>
+    That paragraph is where this lesson gets to catch itself, so it stays with its own mistake
+    visible. The first version of the table above said <strong>324</strong> ungrounded names on
+    <strong>139 of 144</strong> calls, and read as a systematic fabrication problem across
+    essentially the whole eval set. It was not a fact about the model. The scorer keeps a
+    registry mapping each variant to <em>the text it actually read</em>, and looks it up with a
+    default. Every Qwen-family arm was registered; the deployed artifact was scored under a new
+    variant name that nobody had added, so it fell through to the default &mdash; raw ASR with
+    anonymised <code>SPEAKER_00</code> labels, in which the call participants' names never
+    appear, so every summary that names the person on the call reads as invented. Against the
+    corpus the model actually read, the figure is <strong>37</strong>. ROUGE never touched that
+    corpus, which is why the quality column was right the whole time and the fabrication column
+    was wrong by a factor of nine.
+  </p>
+
+  <p>
+    Two things are worth taking from it. A fix that consists of <em>adding the new name to the
+    list</em> does not survive the next name &mdash; the earlier variant had been registered for
+    exactly this reason, and the bug came straight back under a different label. And the
+    deployed model turns out to invent <em>fewer</em> names than anything else measured:
+    37 against the 16-bit student's 46, the tuned 4B's 47, the untuned 8B's 107 and the teacher's
+    109. The registry now stops instead of guessing, so the next new variant fails loudly rather
+    than producing a plausible number.
+  </p>
+
+  <p>
+    Reading the losing calls shows what the drift actually is, and it is not invention.
+    The deployed arm writes <strong>33 words shorter on 110 of 144 calls</strong>, and on its
+    three worst it produced 80, 70 and 130 words where the 16-bit arm produced 151, 158 and 81
+    against references of 181, 171 and 113. ROUGE rewards carrying the call's content, so a
+    summary that drops a third of it loses heavily while inventing nothing. Where it does add
+    names, they are mostly <em>glosses</em> of acronyms it should have left alone &mdash;
+    <code>RCFO (Rico fee&hellip;, BP303&hellip;)</code> where the reference reads <em>Arco fee,
+    Arco Johnson</em>. And some garbling is shared with the 16-bit arm, so it is inherited from
+    the 2B rather than introduced by 4 bits.
+  </p>
+
+  <p>
+    Structurally, nothing about this output looks broken, which is the point. All 144 calls
+    stop of their own accord rather than hitting the 900-token cap; none is empty, none ends
+    mid-sentence, none opens with &ldquo;Here is a summary,&rdquo; and the duplicate rate is
+    0.001. A pipeline that tested for empties, truncations and preamble &mdash; the usual smoke
+    tests &mdash; would report this model as clean. Every bit of the damage is in content that
+    is present, well-formed, and quietly incomplete.
+  </p>
+
+  <h2><span class="num">04</span>Change one thing at a time</h2>
+
+  <p>
+    Here is the trap, and this project walked into it. The comparison above moved more than one
+    thing at once &mdash; and <em>which</em> things is a question you answer by reading the
+    generator, not by recalling what you think you ran. This lesson is about figures that answer
+    a question they were not designed to answer. The honest version of this paragraph is that
+    an earlier draft of it answered one.
+  </p>
+
+  <p>
+    That draft said the two arms differed in <em>decoding</em>: the served run samples at
+    temperature 0.7, it said, while the 16-bit arm decoded greedily. It does not.
+    <code>student_generate.py:135</code> reads <code>do_sample=True, temperature=0.7,
+    top_p=0.9, repetition_penalty=1.05</code> &mdash; the same three numbers the served run
+    sends. Sampling was never the confound, and &ldquo;greedy versus sampled&rdquo; was a
+    remembered property of a different experiment, written into a field that then travelled
+    into three other documents before anyone re-opened the file.
+  </p>
+
+  <p>
+    What actually differs is engine, draw, and precision. The 16-bit arm ran inside
+    transformers, from an unseeded draw; the served run is llama.cpp through Ollama at seed 42;
+    and one of the two is quantized. Three things, one number, and no way to say which of them
+    the 0.0114 belongs to.
+  </p>
+
+  <p>
+    The fix is cheap, and it is the same move the last section made: change one thing. Serving
+    the <em>16-bit</em> GGUF through the same engine at the same sampling <em>and seed</em>
+    makes the two Modelfiles differ in exactly one line &mdash; the source file &mdash; and
+    makes the two runs share their random draw, so what separates them is precision rather than
+    luck. It is a tighter control than the one this section originally proposed, and tighter
+    for an unflattering reason: the variable it was designed to remove was never there.
+  </p>
+
+  <div class="exercise">
+    <div class="exercise__label">Predict before you look</div>
+    <p>
+      If you were writing this section for your own project, the first move is to re-open the
+      generator and list the settings each arm actually used, rather than trusting the note you
+      wrote when you launched it. Do that now, before the next paragraph gives you this
+      project's answer, and write down every field where the two arms disagree. Then predict
+      where the f16 control lands: near 0.428, or near 0.440. A prediction you committed to
+      turns a result into information; the same result read afterwards is just a story.
+    </p>
+  </div>
+
+  <p>
+    It landed at <strong>0.4447</strong>. Above both candidates, which is its own small lesson
+    in why you run the thing. Here is the arithmetic, over the same 144 calls in the same input
+    order:
+  </p>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Comparison</th><th>What it isolates</th><th>&Delta; ROUGE-1</th><th>95% CI</th><th>Verdict</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>16-bit in Ollama &minus; 16-bit in transformers <span class="prov">(measured)</span></td><td>engine and draw</td><td>&minus;0.0048</td><td>[&minus;0.0164, +0.0067]</td><td>a tie</td></tr>
+        <tr><td>16-bit in Ollama &minus; Q4_K_M in Ollama <span class="prov">(measured)</span></td><td>precision alone</td><td><strong>+0.0162</strong></td><td>[+0.0057, +0.0266]</td><td><strong>real</strong></td></tr>
+        <tr><td>16-bit in transformers &minus; Q4_K_M in Ollama <span class="prov">(step 8)</span></td><td>all three, fused</td><td>+0.0114</td><td>[+0.0001, +0.0230]</td><td>reproduced to the digit</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    The first row is the surprise, and it is the reason to run a control rather than reason
+    about one. Through llama.cpp at a fixed seed the same 16-bit weights score
+    <strong>0.4447</strong> against <strong>0.4399</strong> inside transformers &mdash; a
+    difference of &minus;0.0048 with an interval straddling zero, and in the <em>opposite</em>
+    direction to the guess that the engine was the problem. Engine and draw cost nothing
+    measurable; if anything llama.cpp comes out marginally ahead, while writing <strong>16
+    words fewer</strong> (125.0 against 141.2).
+  </p>
+
+  <p>
+    That leaves the second row, and it is the one that matters. <strong>The loss is the
+    quantization.</strong> +0.0162 with a lower bound of +0.0057 is comfortably clear of zero,
+    and it is the term the mission actually spends money on: it is what you pay, in quality,
+    for a file a third the size. The third row is the proof that the split is exhaustive rather
+    than merely plausible &mdash; &minus;0.0048 and +0.0162 sum to +0.0114, the bundled figure to
+    the digit.
+  </p>
+
+  <p>
+    The uncomfortable half is what that arithmetic does to the bundled figure. Because the
+    engine term happens to pull the <em>other</em> way, inside its own noise, the three-way
+    comparison was diluting the effect it was reporting: it published &ldquo;real by a
+    whisker,&rdquo; a lower bound of +0.0001, for a quantity whose true lower bound is
+    +0.0057. Nothing in it was mismeasured. A number answering a question it was never designed
+    to answer is exactly what the control went and unpacked.
+  </p>
+
+  <div class="note">
+    <div class="note__label">Caveat to carry</div>
+    <p>
+      Seed 42 fixes the <em>draw</em>, not the output. Different logits mean the token streams
+      still diverge, so the seed removes the draw as a nuisance variable rather than making the
+      two arms comparable token for token. It narrows the question; it does not delete it.
+    </p>
+  </div>
+
+  <h2><span class="num">05</span>What this buys the mission</h2>
+
+  <p>
+    The mission asked for a model that runs locally without heavy resource use and writes
+    summaries &ldquo;almost as good as the teacher.&rdquo; Both halves now have numbers rather
+    than hopes. The shipped artifact scores <strong>0.4285 ROUGE-1 against its teacher's
+    0.4784</strong> &mdash; about <strong>89%</strong> &mdash; and sits at <strong>~96%</strong>
+    of its own unquantized self as served through the same engine (0.4447), at a median 16
+    seconds per call on CPU, which is about 78 minutes for the 291-call set run one at a time.
+    &ldquo;Almost as good&rdquo; holds. The honest form of it is: almost as good, with a
+    measured, small and <em>statistically real</em> gap of 0.0162, whose cause is named and
+    whose control has run.
+  </p>
+
+  <p>
+    The resource half has a measured shape too, and it is not the one the file sizes suggest.
+    The two GGUFs weigh 1.27 GB (Q4_K_M) and 3.78 GB (f16) &mdash; a factor of 2.96 &mdash; but
+    on the 142 calls neither run slept through, f16 served <strong>1.85&times; the wall time per
+    call</strong> (a median 29.0&nbsp;s against 15.7&nbsp;s; over all 144 the shipped arm's
+    median is 16.0&nbsp;s). The split is the informative part: <strong>1.54&times; in
+    prefill</strong> and <strong>2.51&times; in decode</strong>. Prefill sits far below f16's
+    own 2.96&times; size ratio and decode sits just under it, which is what a compute-bound
+    prefill beside a bandwidth-bound decode should look like on this class of CPU. It is
+    cheaper than its own size, and that is the reason.
+  </p>
+
+  <p>
+    There was a second reason, and this lesson has to take it back. One f16 call spent
+    <strong>1,950 seconds decoding 211 tokens</strong> &mdash; an apparent 250&times; collapse
+    that made the larger model look fragile rather than merely slow. The explanation written
+    down was memory pressure: Ollama memory-maps the GGUF, a 3.78&nbsp;GB mapping is a trimmable
+    target the moment the system wants memory back, and the 1.27&nbsp;GB artifact keeps its
+    pages. It was a good story. It was wrong. Windows keeps a record of its own power
+    transitions, and reading it shows a <strong>1,936-second Modern Standby suspend</strong>
+    spanning that decode, entered <em>after</em> the call had already started &mdash; plus a
+    second outlier in the same run that ends on the second of a logged wake. The laptop slept.
+    No page was evicted, and the smaller file was never the sturdier one; it is only faster.
+  </p>
+
+  <p>
+    The honest version of the argument is the dull one: <strong>1.85&times; the latency and
+    2.96&times; the disk, for +0.0162 ROUGE-1.</strong> That is still enough to quantize when a
+    person is waiting on every call &mdash; a 3.8% relative gain in quality does not buy back
+    nearly doubling every wait &mdash; but it is a <em>trade</em>, not a free lunch and not a
+    durability. And the clause that used to stand here, &ldquo;for no gain in quality,&rdquo;
+    is the same shape as everything else on this page: a figure answering a question it was
+    never designed to answer. One event-log query settled the paging story; one control run
+    settled this one.
+  </p>
+
+  <p>
+    That is the difference this lesson is about. A number you can defend is not one that
+    sounds precise; it is one where you know what it would have taken for it to be wrong, and
+    you went and looked.
+  </p>
+
+  <h2><span class="num">06</span>Primary source</h2>
+
+  <ul class="sources">
+    <li>
+      <a href="https://proceedings.neurips.cc/paper_files/paper/2015/file/86df7dcfd896fcaf2674f757a2463eba-Paper.pdf">Sculley, Holt, Golovin, Davydov, Phillips, Ebner, Chaudhary, Young, Crespo &amp; Dennison &mdash; <em>Hidden Technical Debt in Machine Learning Systems</em></a> (NIPS 2015, pp. 2494&ndash;2502).
+      <span class="why">The paper that names both halves of this lesson. Its <em>configuration debt</em> section is the MTP failure in one sentence. And &sect;2&rsquo;s <strong>CACE principle &mdash; Changing Anything Changes Everything</strong> &mdash; says that CACE &ldquo;applies not only to input signals, but also to hyper-parameters, learning settings, <em>sampling methods</em>, convergence thresholds, data selection, and essentially every other possible tweak.&rdquo; That list is why the f16 control exists: precision, engine and draw all changed at once, and the paper tells you to expect exactly that entanglement. It also predicts the harder half of this lesson &mdash; that the confound you <em>name</em> is another reported field, and has to be read off the code that ran.</span>
+    </li>
+    <li>
+      <a href="https://static.googleusercontent.com/media/research.google.com/en/us/pubs/archive/43146.pdf">Sculley et al. &mdash; <em>Machine Learning: The High-Interest Credit Card of Technical Debt</em></a> (SE4ML / NIPS 2014 workshop).
+      <span class="why">The shorter earlier version of the same argument, and the faster read if you only want the anti-patterns list &mdash; glue code, pipeline jungles, configuration debt. Use it when you are auditing a chain rather than reading for theory.</span>
+    </li>
+  </ul>
+
+  <ul class="roadmap">
+    <li><span class="n">01</span><span class="t">Text, not logits</span><span class="d">Sequence-level distillation, and why the two tokenizers force it.</span></li>
+    <li><span class="n">02</span><span class="t">Audit the teacher</span><span class="d">The cap is a failure detector, not a length limit &mdash; and one failure is invisible to reading.</span></li>
+    <li><span class="n">03</span><span class="t">Reading a loss curve</span><span class="d">LoRA on the audited blend, against a control, and reading a loss curve honestly.</span></li>
+    <li><span class="n">04</span><span class="t">Evaluate honestly</span><span class="d">Paired bootstrap, teacher agreement, and reporting where the student is worse.</span></li>
+    <li class="is-current"><span class="n">05</span><span class="t">Ship it, then check</span><span class="d">Quantization, four numbers that were reported fields rather than measurements, and how to tell precision from engine and draw.</span></li>
+    <li><span class="n">06</span><span class="t">The knob you never turned</span><span class="d">A decoding flag that cut invented names by a third, the tie it hid behind, and why a difference of totals is not a difference on your call.</span></li>
+  </ul>
+
+  <aside class="ask">
+    <div class="ask__label">Ask me</div>
+    <p>
+      Want to see the failing calls yourself? Ask me to pull the three worst ones side by side
+      with the 16-bit arm and the reference, and we can read what the deployed model actually
+      dropped. That is the fastest way to build an intuition for what &ldquo;ROUGE lost 0.0114&rdquo;
+      means in words.
+    </p>
+  </aside>
+
+  <aside class="ask">
+    <div class="ask__label">Ask me</div>
+    <p>
+      Stuck on the difference between a check that can fail and one that only <em>looks</em>
+      like it can? Bring me any check you are relying on &mdash; a hash, a smoke test, an
+      assertion &mdash; and I will ask what it would have to do to know the thing you think it
+      knows.
+    </p>
+  </aside>
+
+  <aside class="ask">
+    <div class="ask__label">Ask me</div>
+    <p>
+      The control came back on the weights, so the next move is a different quantization or an
+      on-policy pass, and that is a bigger conversation than a runtime flag. If you have a
+      project of your own sitting on a fused number like this one &mdash; several things changed
+      between the arm you shipped and the arm you trust &mdash; bring me the two configurations
+      and I will ask which single line you could change to split it. Ask.
+    </p>
+  </aside>
+
+  <div class="quiz">
+    <h3>Check yourself</h3>
+
+    <div class="q" data-fb="Nothing in the chain builds a compute graph. llama-quantize walks the tensors that are present and never asks whether the header implies more; ollama create copies a blob and reads its metadata. The mismatch between a declared block count of 25 and 24 real blocks is only detected when the runtime tries to load the weights at the first token.">
+      <p class="q__text">The GGUF declared 25 blocks and held 24. Quantization and bundling both printed success. Why could neither have caught it?</p>
+      <div class="opts">
+        <button class="opt">Both swallow load-time failures and report them only in verbose mode.</button>
+        <button class="opt">Both compare tensor names but never tensor shapes, dtypes or layouts.</button>
+        <button class="opt" data-correct>Neither builds a compute graph, so neither checks tensors against metadata.</button>
+        <button class="opt">Both validate the file before the earlier merge step has finished.</button>
+      </div>
+      <p class="q__fb"></p>
+    </div>
+
+    <div class="q" data-fb="The old check demanded bit-exact greedy argmaxes, which bf16 cannot deliver: the adapter and the merged model differ in the last bits, so a near-tied position flips and rewrites every later token. The rewrite reads the effect against a measured floor — the same forward twice, which is bit-identical — and every mismatch lands at a bf16 ULP at that logit magnitude.">
+      <p class="q__text">The merge check reported a mismatch that was not a real defect. What was wrong with it?</p>
+      <div class="opts">
+        <button class="opt">It compared the wrong two checkpoints and never loaded the adapter.</button>
+        <button class="opt" data-correct>It demanded a resolution bf16 cannot hold, with no measured floor.</button>
+        <button class="opt">It averaged the logits across positions and hid the largest deviations.</button>
+        <button class="opt">It used the wrong tokenizer and so compared unrelated token ids.</button>
+      </div>
+      <p class="q__fb"></p>
+    </div>
+
+    <div class="q" data-fb="It moved precision, engine and draw together. The 16-bit arm ran inside transformers from an unseeded draw; the served run is llama.cpp through Ollama at seed 42. Sampling is not part of it — both use temperature 0.7, top_p 0.9 and repetition penalty 1.05. Serving the f16 GGUF through the same engine at the same sampling and seed leaves the source weights as the only difference and shares the random draw, so the gap is attributable to precision alone. That control has now run, and it is the one that moved the number from a lower bound of +0.0001 to +0.0057.">
+      <p class="q__text">The deployed arm lost 0.0114 to the 16-bit arm. What control makes that difference attributable to quantization?</p>
+      <div class="opts">
+        <button class="opt">Re-score both arms on a much larger held-out set of calls.</button>
+        <button class="opt">Add many more bootstrap resamples in order to narrow the interval.</button>
+        <button class="opt">Compare the two arms on the calls whose references are longest.</button>
+        <button class="opt" data-correct>Serve the f16 weights through one engine at one fixed seed.</button>
+      </div>
+      <p class="q__fb"></p>
+    </div>
+
+    <div class="quiz__score"></div>
+  </div>
+
+  <footer class="lesson-foot">
+    Lesson 05 &middot; Distillation &middot; the deployment half of the build &middot; sources
+    <code>finetune/scores_q4km.json</code>, <code>finetune/scores_f16.json</code>,
+    <code>finetune/scores_precision.json</code>, <code>finetune/local_samples.jsonl</code>,
+    <code>finetune/verify_quant.py</code>, <code>finetune/verify_merged.py</code>
+  </footer>
+
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

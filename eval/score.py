@@ -33,7 +33,61 @@ COPY_CORPUS = {
     "qwen8b_honest": "model_input",
     "qwen4b": "model_input",
     "bart": "cleaned_transcript",
+    # The distilled student read model_input too -- it is prompted from the same
+    # infer_input.jsonl {system,user} pair as the Qwen baselines, and model_input is
+    # byte-identical to that user field on all 144 calls. Additive only: every existing
+    # variant keeps its entry, so the four baseline rows reproduce unchanged.
+    "student_blend": "model_input",
+    "student_control": "model_input",
+    # student_q4km was absent from this table when step 8 scored the deployed artifact,
+    # so it fell through to the cleaned_transcript default and reported 324 ungrounded
+    # names where the matched corpus gives 37 -- a 9x inflation on the one metric that
+    # catches what ROUGE cannot see, and it was published. Registering the name was the
+    # fix for student_blend; that fix did not survive a *new* variant name, which is why
+    # the lookup below now refuses to guess. See corpus_for().
+    "student_q4km": "model_input",
+    "student_f16": "model_input",
+    "student_greedy": "model_input",
+    "student_q8": "model_input",
+    # The metadata A/B arms read different prompts by construction, so they must not
+    # share model_input: grounding the `meta` arm against a prompt without its
+    # `Prospect:` line would flag a summary that correctly repeats a name it was given.
+    # make_student_eval.py --inputs attaches each arm's own prompt as input_<arm>.
+    "student_plain": "input_plain",
+    "student_meta": "input_meta",
 }
+
+# Per-run overrides from `--corpus variant=field`; see corpus_for().
+CORPUS_OVERRIDE = {}
+
+
+def corpus_for(variant, row):
+    """The text this variant actually read, or stop rather than pick one.
+
+    This used to be `COPY_CORPUS.get(variant, "cleaned_transcript")`. cleaned_transcript
+    is raw ASR with anonymised SPEAKER_00/SPEAKER_01 labels, so the call participants'
+    own names never appear in it, and every summary that names the person on the call --
+    most of them, and what the house reference does too -- reads as invented. Scoring a
+    Qwen-family variant against it inflates ungrounded_names about ninefold (413 against
+    46 for student_blend; 324 against 37 for student_q4km). A missing entry is now a hard
+    stop: on this metric a silent wrong answer is worse than a failed run.
+
+    `--corpus variant=field` overrides the registry for one run. It exists for A/Bs whose
+    arms read *different* prompts: grounding each arm against its own prompt makes the
+    metric incomparable, because a fact removed from one arm's prompt (a deal stage, a
+    prospect name) is then counted as invented when the model correctly infers it. Such a
+    run should point both arms at the same, fullest factual record for the call.
+    """
+    field = CORPUS_OVERRIDE.get(variant)
+    if field is None:
+        try:
+            field = COPY_CORPUS[variant]
+        except KeyError:
+            sys.exit(f"{variant}: not registered in COPY_CORPUS, so there is no record of "
+                     f"which text it actually read. Add it there; do not let the scorer "
+                     f"choose a corpus on your behalf.")
+    return row[field]
+
 
 # magnitude suffixes matter: "$84K" and "84000" are the same figure, and flagging
 # the second as invented would make the fabrication number useless. Percentages are
@@ -283,7 +337,7 @@ def score_variant(rows, variant, scorer):
     for row in rows:
         gen = row["variants"][variant]
         ref = row["reference_summary"]
-        corpus = row[COPY_CORPUS.get(variant, "cleaned_transcript")]
+        corpus = corpus_for(variant, row)
         s = scorer.score(ref, gen)
         out.append({
             "call_id": row["call_id"],
@@ -333,7 +387,17 @@ def main():
     ap.add_argument("--frozen", default=os.path.join(HERE, "EVAL_FROZEN.json"))
     ap.add_argument("--out", default=os.path.join(HERE, "scores.json"))
     ap.add_argument("--stemmer", action=argparse.BooleanOptionalAction, default=True)
+    ap.add_argument("--corpus", nargs="*", default=[], metavar="VARIANT=FIELD",
+                    help="override the grounding corpus for a variant, e.g. "
+                         "student_plain=input_meta. Use when A/B arms read different "
+                         "prompts and must be graded against the same factual record.")
     args = ap.parse_args()
+
+    for spec in args.corpus:
+        if "=" not in spec:
+            sys.exit(f"--corpus entry must be variant=field, got {spec!r}")
+        v, f = spec.split("=", 1)
+        CORPUS_OVERRIDE[v] = f
 
     rows = [json.loads(line) for line in open(args.eval_set, encoding="utf-8") if line.strip()]
     if not rows:

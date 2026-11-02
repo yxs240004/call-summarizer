@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lesson 01 — Text, Not Logits</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  /* ---- figure: only what the drawing needs, colours through tokens ---- */
+  .d-box   { fill:var(--surface);     stroke:var(--rule-2); stroke-width:1.4 }
+  .d-stop  { fill:var(--stop-soft);   stroke:var(--stop);    stroke-width:1.6 }
+  .d-ok    { fill:var(--accent-soft); stroke:var(--accent);  stroke-width:1.6 }
+  .d-line  { stroke:var(--rule-2); stroke-width:1.6; fill:none }
+  .d-go    { stroke:var(--accent); stroke-width:2;   fill:none }
+  .d-head  { fill:var(--rule-2) }
+  .d-headA { fill:var(--accent) }
+  .d-tc    { font:600 13.5px var(--display); fill:var(--ink); text-anchor:middle }
+  .d-s     { font:400 11px var(--body);      fill:var(--muted); text-anchor:middle }
+  .d-m     { font:500 10px var(--mono);      fill:var(--muted); text-anchor:middle }
+  .d-x     { font:700 13px var(--mono); fill:var(--stop);    text-anchor:middle }
+  .d-v     { font:700 13px var(--mono); fill:var(--accent);  text-anchor:middle }
+</style>
+</head>
+<body>
+<main class="lesson">
+
+  <p class="eyebrow">Lesson 01 &middot; <a href="../MISSION.md">Distilling the summarizer</a></p>
+
+  <h1>Text, not logits
+    <span class="sub">Your teacher's token probabilities are unreachable from a
+    Qwen3.5-2B — and that one fact picks your entire method for you.</span>
+  </h1>
+
+  <p class="lede">
+    By the end of this lesson you will know why this distillation has to be
+    <em>sequence-level</em> rather than logit-based, what the three-step recipe
+    looks like as a result, and the first thing you must re-run before any student
+    training can start.
+  </p>
+
+  <h2><span class="num">01</span>Two ways to copy a teacher</h2>
+
+  <p>
+    Every distillation setup has a teacher, a student, and a question: <strong>what
+    actually gets copied across?</strong> There are two answers, and they are not
+    variations on a theme — they need different machinery.
+  </p>
+
+  <p>
+    The <span class="term">soft-target</span> route comes from
+    <a href="https://arxiv.org/abs/1503.02531">Hinton, Vinyals &amp; Dean (2015)</a>.
+    You don't copy the teacher's final answer, you copy its <em>uncertainty</em>: at
+    every position the student is trained to match the teacher's whole probability
+    distribution over the next token — "this one 70%, that one 20%, that one 4%".
+    It is a far richer signal than a single right answer, and it is why distillation
+    can beat training on gold labels alone.
+  </p>
+
+  <p>
+    The <span class="term">hard-target</span> route comes from
+    <a href="https://arxiv.org/abs/1606.07947">Kim &amp; Rush (2016)</a>. You don't
+    copy probabilities at all. You run the teacher over your training inputs to
+    produce finished outputs, and then you train the student on those outputs as if
+    they were gold labels. Plain supervised fine-tuning. The teacher's knowledge
+    arrives as <em>text</em>.
+  </p>
+
+  <figure>
+    <svg viewBox="0 0 620 400" role="img"
+         aria-label="The teacher feeds two possible routes to the student. The token-probability route is blocked because teacher and student have different vocabularies, so no token index corresponds. The generated-text route works, and only that route reaches the student.">
+      <defs>
+        <marker id="ahN" viewBox="0 0 10 10" refX="9" refY="5"
+                markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" class="d-head"/>
+        </marker>
+        <marker id="ahA" viewBox="0 0 10 10" refX="9" refY="5"
+                markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+          <path d="M0 0 L10 5 L0 10 z" class="d-headA"/>
+        </marker>
+      </defs>
+
+      <!-- teacher -->
+      <rect class="d-box" x="170" y="14" width="280" height="56" rx="6"/>
+      <text class="d-tc" x="310" y="38">Teacher &middot; Qwen3-8B + LoRA</text>
+      <text class="d-s"  x="310" y="57">the model you have already trained</text>
+
+      <!-- split -->
+      <path class="d-line" d="M310 70 V98"/>
+      <path class="d-line" d="M155 98 H465"/>
+      <path class="d-line" d="M155 98 V122" marker-end="url(#ahN)"/>
+      <path class="d-line" d="M465 98 V122" marker-end="url(#ahN)"/>
+
+      <!-- what crosses -->
+      <rect class="d-box" x="55" y="122" width="200" height="50" rx="5"/>
+      <text class="d-tc" x="155" y="145">token probabilities</text>
+      <text class="d-m"  x="155" y="162">soft targets</text>
+
+      <rect class="d-box" x="365" y="122" width="200" height="50" rx="5"/>
+      <text class="d-tc" x="465" y="145">generated text</text>
+      <text class="d-m"  x="465" y="162">hard targets</text>
+
+      <path class="d-line" d="M155 172 V194" marker-end="url(#ahN)"/>
+      <path class="d-line" d="M465 172 V194" marker-end="url(#ahN)"/>
+
+      <!-- verdicts -->
+      <rect class="d-stop" x="55" y="194" width="200" height="80" rx="5"/>
+      <text class="d-x" x="155" y="218">&#10007;  cannot cross</text>
+      <text class="d-m" x="155" y="240">151,669 vs 248,320</text>
+      <text class="d-m" x="155" y="258">no shared token index</text>
+
+      <rect class="d-ok" x="365" y="194" width="200" height="80" rx="5"/>
+      <text class="d-v" x="465" y="218">&#10003;  crosses fine</text>
+      <text class="d-m" x="465" y="240">text survives any</text>
+      <text class="d-m" x="465" y="258">tokenizer</text>
+
+      <!-- only one route reaches the student -->
+      <path class="d-go" d="M465 274 V296 H310 V318" marker-end="url(#ahA)"/>
+
+      <rect class="d-box" x="170" y="318" width="280" height="58" rx="6"/>
+      <text class="d-tc" x="310" y="342">Student &middot; Qwen3.5-2B</text>
+      <text class="d-s"  x="310" y="361">trained by ordinary SFT</text>
+    </svg>
+    <figcaption>
+      <b>Only one route arrives.</b> The soft-target path dies at the vocabulary
+      boundary — teacher and student learned separate BPE tables, so there is no
+      token index that means the same thing to both. The hard-target path carries
+      text, which any tokenizer can read.
+    </figcaption>
+  </figure>
+
+  <h2><span class="num">02</span>Why the soft-target route is closed to you</h2>
+
+  <p>
+    Soft targets require one assumption: that when the teacher says "token&nbsp;4127
+    has probability 0.7", the student has a token&nbsp;4127 that means the same
+    thing. Teacher and student must share an output space.
+  </p>
+
+  <p>
+    Yours don't. I read the tokenizer sitting in your <code>qwen3-8b-lora/</code>
+    directory:
+  </p>
+
+  <div class="kv">
+    <div class="kv__row">
+      <div class="kv__k">Teacher</div>
+      <div class="kv__v">Qwen3-8B &mdash; <strong>151,669</strong> tokens</div>
+    </div>
+    <div class="kv__row">
+      <div class="kv__k">Student</div>
+      <div class="kv__v">Qwen3.5-2B &mdash; <strong>248,320</strong> tokens</div>
+    </div>
+    <div class="kv__row">
+      <div class="kv__k">Shared</div>
+      <div class="kv__v">nothing, structurally &mdash; different merge tables</div>
+    </div>
+  </div>
+
+  <p>
+    The sizes are the symptom, not the disease. BPE vocabularies are <em>learned</em>,
+    so the two models don't merely have different-length token lists — they split the
+    same sentence into different pieces. <code>"Kennedy"</code> might be one token to
+    one model and two to the other.
+  </p>
+
+  <div class="note">
+    <span class="note__label">The precise reason</span>
+    <p>
+      This is not a matter of logit distillation being <em>harder</em> across
+      tokenizers. It is <em>undefined</em>. You would be asking the student to match
+      a distribution over a set of events it does not have. There is no loss function
+      to write.
+    </p>
+  </div>
+
+  <h2><span class="num">03</span>So the recipe picks itself</h2>
+
+  <p>
+    Sequence-level distillation is the only option — which is convenient, because
+    <a href="https://arxiv.org/abs/1606.07947">Kim &amp; Rush</a> found it is also
+    the one that works well for exactly this kind of task. Three steps, and you
+    already have the tooling for the third:
+  </p>
+
+  <ol>
+    <li>
+      <strong>Feed the teacher your training prompts.</strong> The user messages in
+      your <em>training</em> split — the same <code>build_model_input()</code> text
+      the 8B was trained on, but deliberately not the same records. &sect;05 explains
+      why that distinction is the entire reason step 1 is expensive.
+    </li>
+    <li>
+      <strong>Collect its summaries as pseudo-labels.</strong> The teacher's output
+      <em>becomes</em> the target. No reference summaries involved.
+    </li>
+    <li>
+      <strong>Train the student with plain SFT</strong> on
+      <code>{prompt &rarr; teacher summary}</code> pairs. The same
+      <code>SFTTrainer</code> you already know.
+    </li>
+  </ol>
+
+  <aside class="snote">
+    <p>
+      <strong>Decode with beam search, not sampling.</strong> Kim &amp; Rush's
+      "approximate" mode uses the teacher's beam search because it surfaces
+      higher-probability sequences, giving the student cleaner targets. Your existing
+      <code>results.jsonl</code> was generated with
+      <code>do_sample=True, temperature=0.7</code> — that was tuned for producing
+      <em>deliverable</em> summaries, and it is not the same job as producing
+      <em>teaching</em> targets.
+    </p>
+  </aside>
+
+  <div class="note note--warn">
+    <span class="note__label">A bonus you get for free</span>
+    <p>
+      Kim &amp; Rush also found Seq-KD students do not need beam search at
+      <em>inference</em> — greedy decoding suffices. That is exactly what you want on
+      a CPU, where beam search multiplies your compute by the beam width.
+    </p>
+  </div>
+
+  <h2><span class="num">04</span>Check the claim on your own machine</h2>
+
+  <div class="exercise">
+    <span class="exercise__label">Exercise &middot; 3 minutes</span>
+    <h3>Measure the vocabulary gap yourself</h3>
+    <p>
+      Don't take the table in &sect;02 on trust. Download both tokenizers
+      (they are small — no model weights) and measure the overlap. The last number is
+      the one that matters.
+    </p>
+
+    <div class="code-head">
+      <span class="code-head__label">vocab_gap.py</span>
+      <button class="copy" type="button">Copy</button>
+    </div>
+<pre><code>from transformers import AutoTokenizer
+
+teacher = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B")     # the 8B you trained
+student = AutoTokenizer.from_pretrained("Qwen/Qwen3.5-2B")   # the 2B you want
+
+tv, sv = teacher.get_vocab(), student.get_vocab()
+print("teacher vocab            :", len(tv))
+print("student vocab            :", len(sv))
+
+shared = set(tv) &amp; set(sv)
+print("shared token strings     :", len(shared))
+
+# The number that decides the method: how many shared strings also sit at
+# the SAME index in both vocabularies. Logit distillation needs this to be
+# large. Everything else is decoration.
+same_index = sum(1 for k in shared if tv[k] == sv[k])
+print("shared at the same index :", same_index)
+
+# And the tokenizers disagree about how to split text at all:
+for word in ("Kennedy", "acquisitions", " $2.4M"):
+    print(repr(word), "->", teacher.tokenize(word), "|", student.tokenize(word))</code></pre>
+
+    <p class="expected"><b>What confirms the lesson:</b> the two vocab sizes differ, and
+"shared at the same index" is tiny relative to either — far too small to support
+per-token probability matching. The last loop will usually show the two tokenizers
+cutting the same word into different pieces.
+
+Your exact counts will shift slightly with your transformers version; the
+<i>shape</i> of the result is what you are reading.</p>
+  </div>
+
+  <h2><span class="num">05</span>Two things to know before you start</h2>
+
+  <h3>Your teacher has answered none of the questions</h3>
+  <p>
+    <code>results.jsonl</code> holds 144 teacher summaries. They were generated over
+    the <em>deliverable</em> calls — the 144 your project exists to summarize — and
+    there is a deliberate reason your student must not train on any of them.
+  </p>
+  <p>
+    Of the 291 training records, <strong>137 are deliverable calls</strong>. Training
+    the student on those would teach it the answers to the very benchmark you are
+    about to grade it on. The student would look better than it is, and its score
+    would not be comparable to the 4B and 8B numbers you already have — both of
+    which were trained on a clean split.
+  </p>
+  <p>
+    So the student trains on the <strong>154 records that are not deliverable
+    calls</strong> — 142 train, 12 validation. That split already exists on disk, as
+    <code>call-summarizer/finetune/train.jsonl</code>. And the teacher's 144
+    summaries cover <em>zero</em> of those 154: the two sets are disjoint by
+    construction.
+  </p>
+  <p>
+    Which is why step 1 of the recipe is the whole job rather than a formality.
+    Every pseudo-label has to be generated from scratch.
+    <code>make_infer_input.py</code> already knows how to rebuild these prompts from
+    <code>dataset_raw.json</code>; it points at the delivered calls today, and needs
+    pointing at the training ones instead.
+  </p>
+
+  <div class="note note--stop">
+    <span class="note__label">The trap that costs people a week</span>
+    <p>
+      <a href="https://arxiv.org/html/2310.13760">DisCal (2023)</a> found that naive
+      sequence-level distillation <strong>reduces abstractiveness</strong> — it makes
+      the student copy more from the transcript rather than summarizing it. Seq-KD
+      targets are fluent and confident, and a small student imitates the fluency
+      while losing the abstraction.
+    </p>
+    <p>
+      This is testable for you rather than theoretical: your
+      <code>eval/</code> scorer already reports <strong>copy rate</strong>. If the
+      student's copy rate climbs while ROUGE holds steady, this is what happened — and
+      the fix is generating several candidate summaries per call and keeping the ones
+      that score well on <em>both</em> informativeness and novelty, not just taking the
+      top beam.
+    </p>
+  </div>
+
+  <h2><span class="num">06</span>Retrieval check</h2>
+
+  <p>Answer from memory. One attempt each — the effort is the point.</p>
+
+  <div class="quiz">
+    <div class="q" data-fb="Logit distillation needs one token index to denote the same event in both models. Two independently learned BPE tables give you no such correspondence.">
+      <p class="q__text">Why can't you distil this teacher's token probabilities into this student?</p>
+      <div class="opts">
+        <button class="opt" type="button">Teacher and student were trained on different corpora</button>
+        <button class="opt" type="button" data-correct>Teacher and student use tokenizers with different vocabularies</button>
+        <button class="opt" type="button">Teacher and student produce summaries of different lengths</button>
+        <button class="opt" type="button">Teacher and student differ only in parameter count</button>
+      </div>
+      <p class="q__fb"></p>
+    </div>
+
+    <div class="q" data-fb="The pseudo-labels are the teacher's own outputs. The Supabase summaries were the teacher's training data, not its voice — reusing them skips the distillation entirely.">
+      <p class="q__text">What does the student train on in sequence-level distillation?</p>
+      <div class="opts">
+        <button class="opt" type="button">The reference summaries the teacher was originally given</button>
+        <button class="opt" type="button">The student's own summaries corrected by teacher feedback</button>
+        <button class="opt" type="button">Both teacher summaries and the original reference summaries</button>
+        <button class="opt" type="button" data-correct>The teacher's generated summaries for each training call</button>
+      </div>
+      <p class="q__fb"></p>
+    </div>
+
+    <div class="q" data-fb="Copy bias is the documented failure mode, and your eval suite measures copy rate already — so you will see it rather than guess at it.">
+      <p class="q__text">What does DisCal warn will deteriorate under naive sequence-level distillation?</p>
+      <div class="opts">
+        <button class="opt" type="button" data-correct>Abstractiveness falls, so summaries copy the transcript more</button>
+        <button class="opt" type="button">Fluency falls, so summaries contain more grammatical errors</button>
+        <button class="opt" type="button">Faithfulness falls, so summaries invent more unsupported facts</button>
+        <button class="opt" type="button">Diversity falls, so summaries repeat identical phrasing more</button>
+      </div>
+      <p class="q__fb"></p>
+    </div>
+
+    <p class="quiz__score"></p>
+  </div>
+
+  <h2><span class="num">07</span>Read this next</h2>
+
+  <ul class="sources">
+    <li>
+      <a href="https://arxiv.org/abs/1606.07947">Kim &amp; Rush, <em>Sequence-Level
+      Knowledge Distillation</em> (EMNLP 2016)</a>
+      <span class="why">The paper this entire mission rests on. Read &sect;3 and the
+      results tables; the derivation is not what you need. Their headline finding —
+      students ~10&times; faster with minimal loss, and no beam search needed at test
+      time — is the case for what you are doing.</span>
+    </li>
+    <li>
+      <a href="https://arxiv.org/html/2310.13760">DisCal, <em>Enhancing Abstractiveness
+      of Summarization Models through Calibrated Distillation</em> (2023)</a>
+      <span class="why">Read the introduction and the failure analysis. Skip to this
+      the moment your student's copy rate rises.</span>
+    </li>
+  </ul>
+
+  <h2><span class="num">08</span>Where this is going</h2>
+
+  <ul class="roadmap">
+    <li><span class="n">01</span><span class="t">Text, not logits</span><span class="d">Sequence-level distillation, and why the two tokenizers force it.</span></li>
+    <li><span class="n">02</span><span class="t">Audit the teacher</span><span class="d">The cap is a failure detector, not a length limit &mdash; and one failure is invisible to reading.</span></li>
+    <li><span class="n">03</span><span class="t">Reading a loss curve</span><span class="d">LoRA on the audited blend, against a control, and reading a loss curve honestly.</span></li>
+    <li><span class="n">04</span><span class="t">Evaluate honestly</span><span class="d">Paired bootstrap, teacher agreement, and reporting where the student is worse.</span></li>
+    <li><span class="n">05</span><span class="t">Ship it, then check</span><span class="d">Quantization, four numbers that were reported fields rather than measurements, and how to tell precision from engine and draw.</span></li>
+    <li><span class="n">06</span><span class="t">The knob you never turned</span><span class="d">A decoding flag that cut invented names by a third, the tie it hid behind, and why a difference of totals is not a difference on your call.</span></li>
+  </ul>
+
+  <p>
+    Terms used here are defined in the
+    <a href="../reference/distillation-glossary.html">distillation glossary</a>.
+  </p>
+
+  <div class="ask">
+    <span class="ask__label">Ask your teacher</span>
+    <p>
+      I am your teacher for this, not just the author of this page — ask me anything
+      that did not land. Good candidates right now: <em>what does "shared at the same
+      index" actually tell me?</em>, <em>why beam search rather than greedy for the
+      teacher?</em>, or <em>how many pseudo-samples per call is worth generating?</em>
+      I can also just run the &sect;04 exercise with you and read the output.
+    </p>
+  </div>
+
+  <footer class="lesson-foot">Lesson 01 of 04 &middot; written 2026-10-12</footer>
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

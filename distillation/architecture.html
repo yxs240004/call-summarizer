@@ -1,0 +1,968 @@
+<title>Meeting Summarizer Architecture</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  /* ============================================================
+     Design tokens — cool slate-teal neutrals (petroleum-leaning),
+     one accent per model generation so the before/after reads at a glance.
+     Layout: single column, wide pipeline figure first, evidence after.
+     ============================================================ */
+  :root{
+    --bg:#f3f7f7;
+    --surface:#ffffff;
+    --surface-2:#eaf1f1;
+    --ink:#0d1719;
+    --ink-2:#3c4e53;
+    --muted:#6a7f84;
+    --rule:#d6e0e1;
+    --rule-2:#bfced0;
+
+    --accent:#0b7168;        /* fine-tuned path / the result */
+    --accent-bg:#e0f0ed;
+    --accent-line:#9fd0c8;
+
+    --alt:#5a7183;           /* baseline path */
+    --alt-bg:#e9eef2;
+    --alt-line:#c1ced8;
+
+    --warn:#8d5200;          /* baseline failure */
+    --warn-bg:#fbf0dc;
+    --warn-line:#e5c99a;
+
+    --display:'Archivo','Helvetica Neue',Helvetica,Arial,sans-serif;
+    --body:'IBM Plex Sans',ui-sans-serif,system-ui,-apple-system,sans-serif;
+    --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0b1214;
+      --surface:#141d20;
+      --surface-2:#1a2528;
+      --ink:#e7efef;
+      --ink-2:#b4c4c7;
+      --muted:#8ba0a5;
+      --rule:#243336;
+      --rule-2:#33464b;
+
+      --accent:#4dc0b1;
+      --accent-bg:#0f2a28;
+      --accent-line:#2d5f59;
+
+      --alt:#93a9ba;
+      --alt-bg:#1b262c;
+      --alt-line:#35474f;
+
+      --warn:#dfa75b;
+      --warn-bg:#2a2013;
+      --warn-line:#5b4720;
+
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0b1214;
+    --surface:#141d20;
+    --surface-2:#1a2528;
+    --ink:#e7efef;
+    --ink-2:#b4c4c7;
+    --muted:#8ba0a5;
+    --rule:#243336;
+    --rule-2:#33464b;
+
+    --accent:#4dc0b1;
+    --accent-bg:#0f2a28;
+    --accent-line:#2d5f59;
+
+    --alt:#93a9ba;
+    --alt-bg:#1b262c;
+    --alt-line:#35474f;
+
+    --warn:#dfa75b;
+    --warn-bg:#2a2013;
+    --warn-line:#5b4720;
+
+    color-scheme: dark;
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    font-family:var(--body);
+    font-size:16px;
+    line-height:1.62;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{
+    max-width:1240px;
+    margin-inline:auto;
+    padding-inline:20px;
+    padding-block:40px 80px;
+  }
+
+  /* ---------- masthead ---------- */
+  .eyebrow{
+    font-family:var(--mono);
+    font-size:11.5px;
+    font-weight:500;
+    letter-spacing:.1em;
+    text-transform:uppercase;
+    color:var(--muted);
+    margin:0 0 14px;
+  }
+  h1{
+    font-family:var(--display);
+    font-weight:700;
+    font-size:clamp(34px,5.4vw,54px);
+    line-height:1.04;
+    letter-spacing:-.02em;
+    text-wrap:balance;
+    margin:0 0 16px;
+  }
+  .thesis{
+    font-size:clamp(17px,2.1vw,20px);
+    line-height:1.5;
+    color:var(--ink-2);
+    max-width:64ch;
+    margin:0 0 12px;
+  }
+  .thesis strong{color:var(--ink);font-weight:600}
+
+  /* ---------- headline figures ---------- */
+  .tiles{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(168px,1fr));
+    gap:1px;
+    background:var(--rule);
+    border:1px solid var(--rule);
+    border-radius:10px;
+    overflow:hidden;
+    margin:34px 0 8px;
+  }
+  .tile{
+    background:var(--surface);
+    padding:18px 18px 16px;
+  }
+  .tile .k{
+    font-family:var(--mono);
+    font-size:10.5px;
+    letter-spacing:.09em;
+    text-transform:uppercase;
+    color:var(--muted);
+    display:block;
+    margin-bottom:8px;
+  }
+  .tile .v{
+    font-family:var(--display);
+    font-weight:700;
+    font-size:26px;
+    line-height:1.1;
+    letter-spacing:-.01em;
+    font-variant-numeric:tabular-nums;
+    display:block;
+  }
+  .tile .v small{
+    font-family:var(--mono);
+    font-weight:500;
+    font-size:13px;
+    color:var(--muted);
+    letter-spacing:0;
+  }
+  .tile .n{font-size:12.5px;color:var(--muted);display:block;margin-top:6px}
+  .tile--win .v{color:var(--accent)}
+
+  /* ---------- sections ---------- */
+  section{margin-top:64px}
+  h2{
+    font-family:var(--display);
+    font-weight:600;
+    font-size:clamp(22px,2.9vw,29px);
+    line-height:1.18;
+    letter-spacing:-.015em;
+    text-wrap:balance;
+    margin:0 0 6px;
+  }
+  h2 .num{
+    font-family:var(--mono);
+    font-size:.62em;
+    font-weight:500;
+    color:var(--muted);
+    margin-right:.6em;
+  }
+  h3{
+    font-family:var(--display);
+    font-weight:600;
+    font-size:16.5px;
+    letter-spacing:-.005em;
+    margin:0 0 4px;
+  }
+  .lede{color:var(--ink-2);max-width:70ch;margin:0 0 22px;font-size:16.5px}
+  p{margin:0 0 14px;max-width:70ch}
+  a{color:var(--accent);text-underline-offset:2px}
+  code,.mono{font-family:var(--mono);font-size:.865em}
+  code{
+    background:var(--surface-2);
+    border:1px solid var(--rule);
+    border-radius:4px;
+    padding:.08em .34em;
+    white-space:nowrap;
+  }
+
+  /* ---------- figure ---------- */
+  figure{margin:0}
+  .figframe{
+    background:var(--surface);
+    border:1px solid var(--rule);
+    border-radius:12px;
+    padding:20px 18px 8px;
+  }
+  figcaption{
+    font-size:13.5px;
+    color:var(--muted);
+    max-width:78ch;
+    margin:12px 2px 0;
+    padding-bottom:6px;
+    line-height:1.55;
+  }
+
+  /* SVG pieces — colours via CSS so tokens work in both themes */
+  .diag{width:100%;height:auto;display:block}
+  .diag--narrow{display:none;max-width:560px;margin-inline:auto}
+
+  .d-box{fill:var(--surface);stroke:var(--rule-2);stroke-width:1.3}
+  .d-box--base{fill:var(--alt-bg);stroke:var(--alt-line)}
+  .d-box--ft{fill:var(--accent-bg);stroke:var(--accent-line)}
+  .d-box--out{fill:var(--surface-2);stroke:var(--rule-2)}
+  .d-bandA{fill:var(--warn-bg);stroke:var(--warn-line)}
+  .d-bandB{fill:var(--accent-bg);stroke:var(--accent-line)}
+  .d-hair{stroke:var(--rule-2);stroke-width:1;fill:none}
+  .d-dash{stroke:var(--rule-2);stroke-width:1;stroke-dasharray:4 5;fill:none}
+  .d-flow{stroke:var(--muted);stroke-width:1.5;fill:none}
+  .ah{fill:var(--muted)}
+
+  .t-eye{fill:var(--muted);font:600 11px var(--mono);letter-spacing:.09em}
+  .t-lane{font:600 11.5px var(--mono);letter-spacing:.08em}
+  .t-lane--a{fill:var(--alt)}
+  .t-lane--b{fill:var(--accent)}
+  .t-title{fill:var(--ink);font:600 12px var(--mono)}
+  .t-title-s{fill:var(--ink);font:600 11px var(--mono)}
+  .t-mono{fill:var(--muted);font:400 10px var(--mono)}
+  .t-mono-s{fill:var(--muted);font:400 9px var(--mono)}
+  .t-sans{fill:var(--muted);font:400 10px var(--body)}
+  .t-acc{fill:var(--accent);font:500 9px var(--mono)}
+  .t-ink2{fill:var(--ink-2);font:400 10.5px var(--body)}
+  .t-bandA-l{fill:var(--warn);font:600 10.5px var(--mono);letter-spacing:.07em}
+  .t-bandA-t{fill:var(--ink-2);font:400 11px var(--body)}
+  .t-bandB-l{fill:var(--accent);font:600 10.5px var(--mono);letter-spacing:.07em}
+  .t-bandB-t{fill:var(--ink-2);font:400 11px var(--body)}
+  .t-narrow-t{fill:var(--ink);font:600 14px var(--mono)}
+  .t-narrow-s{fill:var(--muted);font:400 12px var(--body)}
+  .t-narrow-m{fill:var(--muted);font:400 12px var(--mono)}
+
+  @media (max-width:1079px){
+    .diag--wide{display:none}
+    .diag--narrow{display:block}
+  }
+
+  /* ---------- path summary cards ---------- */
+  .paths{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(300px,1fr));
+    gap:16px;
+    margin-top:26px;
+  }
+  .path{
+    background:var(--surface);
+    border:1px solid var(--rule);
+    border-left:3px solid var(--alt-line);
+    border-radius:10px;
+    padding:20px 22px 18px;
+  }
+  .path--ft{border-left-color:var(--accent)}
+  .path .tag{
+    font-family:var(--mono);
+    font-size:10.5px;
+    letter-spacing:.09em;
+    text-transform:uppercase;
+    color:var(--muted);
+    display:block;
+    margin-bottom:10px;
+  }
+  .path--ft .tag{color:var(--accent)}
+  .path p{font-size:14.5px;margin-bottom:10px}
+  .path p:last-child{margin-bottom:0}
+
+  /* ---------- table ---------- */
+  .tablewrap{overflow-x:auto;border:1px solid var(--rule);border-radius:10px;background:var(--surface)}
+  table{border-collapse:collapse;width:100%;min-width:720px;font-size:13.5px}
+  th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--rule);vertical-align:top}
+  thead th{
+    font-family:var(--mono);
+    font-size:10.5px;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    color:var(--muted);
+    font-weight:600;
+    background:var(--surface-2);
+    white-space:nowrap;
+  }
+  tbody tr:last-child td{border-bottom:none}
+  td:first-child{font-family:var(--mono);font-size:12.5px;white-space:nowrap;color:var(--ink);font-weight:500}
+  td:nth-child(2),td:nth-child(3){font-family:var(--mono);font-size:11.5px;color:var(--ink-2)}
+  td:nth-child(4){color:var(--ink-2);min-width:24ch}
+  tr.phase td{background:var(--surface-2);font-family:var(--mono);font-size:10.5px;
+    letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;padding:8px 14px}
+
+  /* ---------- summary comparison ---------- */
+  .compare{display:grid;gap:14px;margin-top:24px}
+  .cmp{
+    background:var(--surface);
+    border:1px solid var(--rule);
+    border-radius:10px;
+    padding:18px 20px 18px;
+    border-left:3px solid var(--rule-2);
+  }
+  .cmp--base{border-left-color:var(--alt-line)}
+  .cmp--ft{border-left-color:var(--accent)}
+  .cmp--ref{border-left-color:var(--warn-line)}
+  .cmp .head{
+    display:flex;
+    flex-wrap:wrap;
+    align-items:baseline;
+    gap:10px;
+    margin-bottom:10px;
+  }
+  .cmp .who{font-family:var(--display);font-weight:600;font-size:15.5px}
+  .cmp .meta{font-family:var(--mono);font-size:11px;color:var(--muted)}
+  .cmp .body{font-size:15px;line-height:1.6;color:var(--ink);margin:0;max-width:none}
+  .cmp .body.is-fail{color:var(--warn)}
+  .cmp .foot{margin-top:10px;font-size:12.5px;color:var(--muted)}
+  .verdict{
+    font-family:var(--mono);
+    font-size:10px;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    padding:2px 7px;
+    border-radius:99px;
+    border:1px solid var(--rule-2);
+    color:var(--muted);
+  }
+  .verdict--fail{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn)}
+  .verdict--ok{background:var(--accent-bg);border-color:var(--accent-line);color:var(--accent)}
+
+  /* ---------- findings ---------- */
+  .findings{display:grid;gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:10px;overflow:hidden;margin-top:24px}
+  .find{background:var(--surface);padding:16px 18px;display:grid;gap:4px;grid-template-columns:1fr}
+  .find .f-k{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  .find .f-v{font-size:14.5px;color:var(--ink-2)}
+  .find .f-v b{color:var(--ink);font-weight:600}
+  .find .f-v .mono{color:var(--muted)}
+
+  /* ---------- footer note ---------- */
+  .note{
+    margin-top:56px;
+    border-top:1px solid var(--rule);
+    padding-top:20px;
+    font-size:13px;
+    color:var(--muted);
+    max-width:80ch;
+  }
+  .note p{font-size:13px;color:var(--muted)}
+  .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:22px 34px;margin-top:20px}
+  .cols h3{margin-bottom:8px}
+  .cols ul{margin:0;padding-left:1.1em}
+  .cols li{font-size:14px;color:var(--ink-2);margin-bottom:5px}
+  ul.plain{list-style:none;padding:0;margin:0}
+  ul.plain li{font-size:14.5px;color:var(--ink-2);margin-bottom:7px;padding-left:16px;position:relative}
+  ul.plain li::before{content:"";position:absolute;left:0;top:.62em;width:5px;height:1px;background:var(--muted)}
+</style>
+
+<div class="wrap">
+
+  <p class="eyebrow">C:\Projects\meeting-summarizer</p>
+  <h1>Two pipelines, one goal: summaries in the house style</h1>
+  <p class="thesis">
+    Sales-call transcripts land in Supabase with reference summaries already written by a
+    large model. This project rebuilds that generator from scratch: a first pass with an
+    off-the-shelf BART summarizer to see what "free" gets you, then a
+    <strong>Qwen3-8B LoRA fine-tune</strong> taught to write like the firm's own CRM briefings —
+    prospect named, specifics kept, <em>Next steps</em> and <em>Outcome signal</em> closed out.
+  </p>
+
+  <div class="tiles">
+    <div class="tile">
+      <span class="k">Training pairs</span>
+      <span class="v">305</span>
+      <span class="n">completed calls pulled from Supabase</span>
+    </div>
+    <div class="tile">
+      <span class="k">Split</span>
+      <span class="v">268 <small>/ 23</small></span>
+      <span class="n">train / validation, after outlier filter</span>
+    </div>
+    <div class="tile">
+      <span class="k">Calls delivered</span>
+      <span class="v">144</span>
+      <span class="n">summarized by both models</span>
+    </div>
+    <div class="tile tile--win">
+      <span class="k">Speaker leakage</span>
+      <span class="v">128 <small>→ 3</small></span>
+      <span class="n">of 144 summaries still say SPEAKER_00</span>
+    </div>
+  </div>
+
+  <section id="diagram">
+    <h2><span class="num">01</span>The architecture</h2>
+    <p class="lede">
+      One source, two taps into it, two output directories. The baseline reads cleaned
+      transcript files; the fine-tune reads Supabase directly, because it needs the
+      reference summary as its training target — not just the words.
+    </p>
+
+    <figure>
+      <div class="figframe">
+
+        <!-- ============ WIDE DIAGRAM ============ -->
+        <svg class="diag diag--wide" viewBox="0 0 1280 520" role="img"
+             aria-label="Pipeline diagram. Supabase's calls_for_analysis view is read two ways. One selection keeps completed calls of 240 seconds or more, producing 144 cleaned transcript files plus a CSV index, which feed an off-the-shelf BART summarizer with a chunk-and-merge step, writing output per call — but 128 of 144 of those summaries still say SPEAKER_00. The other selection keeps all 305 completed calls, producing dataset_raw.json with reference summaries, which feed a dataset builder, a LoRA fine-tune of Qwen3-8B, and a generation step, writing output_v2 with the new summary beside the original — only 3 of 144 of those summaries say SPEAKER_00.">
+          <defs>
+            <marker id="arW" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+              <path d="M0 0 L10 5 L0 10 z" class="ah"/>
+            </marker>
+          </defs>
+
+          <!-- column eyebrows -->
+          <text class="t-eye" x="20" y="30">SUPABASE SOURCE</text>
+          <text class="t-eye" x="200" y="30">ROW SELECT</text>
+          <text class="t-eye" x="396" y="30">PREPARED INPUT</text>
+          <text class="t-eye" x="570" y="30">MODEL PIPELINE</text>
+
+          <!-- lane labels -->
+          <text class="t-lane t-lane--a" x="570" y="86">PHASE 1 — OFF-THE-SHELF BART</text>
+          <line class="d-hair" x1="800" y1="82" x2="1252" y2="82"/>
+          <text class="t-lane t-lane--b" x="570" y="356">PHASE 2 — QWEN3-8B + LORA</text>
+          <line class="d-hair" x1="762" y1="352" x2="1256" y2="352"/>
+
+          <!-- source card -->
+          <rect class="d-box" x="20" y="96" width="160" height="138" rx="10"/>
+          <text class="t-title-s" x="34" y="122">calls_for_analysis</text>
+          <text class="t-sans" x="34" y="140" style="font-size:9.5px">Supabase view · PostgREST</text>
+          <line class="d-hair" x1="34" y1="156" x2="166" y2="156"/>
+          <text class="t-sans" x="34" y="178">305 completed rows</text>
+          <text class="t-sans" x="34" y="194">144 with duration ≥ 240 s</text>
+          <text class="t-acc" x="34" y="216" style="font-size:9.5px">summmary = style target</text>
+
+          <!-- row-select filters -->
+          <rect class="d-box" x="200" y="96" width="176" height="68" rx="8"/>
+          <text class="t-title-s" x="212" y="120">completed</text>
+          <text class="t-mono" x="212" y="137">AND duration ≥ 240 s</text>
+          <text class="t-sans" x="212" y="153">→ 144 calls</text>
+
+          <rect class="d-box" x="200" y="366" width="176" height="68" rx="8"/>
+          <text class="t-title-s" x="212" y="390">completed only</text>
+          <text class="t-mono" x="212" y="407">no duration filter</text>
+          <text class="t-sans" x="212" y="423">→ 305 rows</text>
+
+          <!-- prepared inputs -->
+          <rect class="d-box" x="396" y="96" width="150" height="68" rx="8"/>
+          <text class="t-title-s" x="408" y="120">cleaned .txt</text>
+          <text class="t-mono" x="408" y="137">+ index.csv</text>
+          <text class="t-sans" x="408" y="153">144 transcripts</text>
+
+          <rect class="d-box" x="396" y="366" width="150" height="68" rx="8"/>
+          <text class="t-title-s" x="408" y="390">dataset_raw.json</text>
+          <text class="t-sans" x="408" y="407">305 records</text>
+          <text class="t-sans" x="408" y="423">+ target summaries</text>
+
+          <!-- lane A: baseline -->
+          <rect class="d-box d-box--base" x="570" y="96" width="220" height="68" rx="8"/>
+          <text class="t-title" x="584" y="122">Summarize</text>
+          <text class="t-mono" x="584" y="140">summarize.py · BART-large</text>
+          <text class="t-sans" x="584" y="156">MEETING_SUMMARY · 406 M params</text>
+
+          <rect class="d-box d-box--base" x="806" y="96" width="220" height="68" rx="8"/>
+          <text class="t-title" x="820" y="122">Chunk and merge</text>
+          <text class="t-mono" x="820" y="140">850-token sentence chunks</text>
+          <text class="t-sans" x="820" y="156">map each → reduce until one pass</text>
+
+          <rect class="d-box d-box--out" x="1042" y="96" width="220" height="68" rx="8"/>
+          <text class="t-title" x="1056" y="122">Output</text>
+          <text class="t-mono" x="1056" y="140">output/&lt;call_id&gt;.json</text>
+          <text class="t-sans" x="1056" y="156">144 files + _all_summaries.csv</text>
+
+          <!-- lane A arrows -->
+          <path class="d-flow" d="M180 130 H197" marker-end="url(#arW)"/>
+          <path class="d-flow" d="M376 130 H393" marker-end="url(#arW)"/>
+          <path class="d-flow" d="M546 130 H567" marker-end="url(#arW)"/>
+          <path class="d-flow" d="M790 130 H803" marker-end="url(#arW)"/>
+          <path class="d-flow" d="M1026 130 H1039" marker-end="url(#arW)"/>
+
+          <!-- lane A verdict band -->
+          <rect class="d-bandA" x="570" y="180" width="692" height="52" rx="8"/>
+          <text class="t-bandA-l" x="586" y="202">BASELINE RESULT</text>
+          <text class="t-bandA-t" x="586" y="220">128 / 144 summaries still say SPEAKER_00 · median 210 chars · prospect never named</text>
+
+          <!-- lane B: fine-tune -->
+          <rect class="d-box d-box--ft" x="570" y="366" width="126" height="68" rx="8"/>
+          <text class="t-title-s" x="580" y="392">Query Supabase</text>
+          <text class="t-mono-s" x="580" y="409">export_dataset.py</text>
+          <text class="t-acc" x="580" y="424">→ 305 records</text>
+
+          <rect class="d-box d-box--ft" x="710" y="366" width="126" height="68" rx="8"/>
+          <text class="t-title-s" x="720" y="392">Build chat set</text>
+          <text class="t-mono-s" x="720" y="409">build_dataset.py</text>
+          <text class="t-acc" x="720" y="424">268 train / 23 val</text>
+
+          <rect class="d-box d-box--ft" x="850" y="366" width="126" height="68" rx="8"/>
+          <text class="t-title-s" x="860" y="392">LoRA fine-tune</text>
+          <text class="t-mono-s" x="860" y="409">train.py · r=16</text>
+          <text class="t-acc" x="860" y="424">4096 ctx · 24 GB</text>
+
+          <rect class="d-box d-box--ft" x="990" y="366" width="126" height="68" rx="8"/>
+          <text class="t-title-s" x="1000" y="392">Generate</text>
+          <text class="t-mono-s" x="1000" y="409">predict.py · ×144</text>
+          <text class="t-acc" x="1000" y="424">→ results.jsonl</text>
+
+          <rect class="d-box d-box--out" x="1130" y="366" width="126" height="68" rx="8"/>
+          <text class="t-title-s" x="1140" y="392">Output</text>
+          <text class="t-mono-s" x="1140" y="409">output_v2/&lt;id&gt;</text>
+          <text class="t-mono-s" x="1140" y="424">new + original</text>
+
+          <!-- lane B arrows -->
+          <path class="d-flow" d="M180 212 H188 V400 H197" marker-end="url(#arW)"/>
+          <path class="d-flow" d="M376 400 H393" marker-end="url(#arW)"/>
+          <path class="d-flow" d="M546 400 H567" marker-end="url(#arW)"/>
+          <path class="d-flow" d="M696 400 H707" marker-end="url(#arW)"/>
+          <path class="d-flow" d="M836 400 H847" marker-end="url(#arW)"/>
+          <path class="d-flow" d="M976 400 H987" marker-end="url(#arW)"/>
+          <path class="d-flow" d="M1116 400 H1127" marker-end="url(#arW)"/>
+
+          <!-- lane B verdict band -->
+          <rect class="d-bandB" x="570" y="450" width="686" height="52" rx="8"/>
+          <text class="t-bandB-l" x="586" y="472">FINE-TUNED RESULT</text>
+          <text class="t-bandB-t" x="586" y="490">3 / 144 summaries say SPEAKER_00 · median 945 chars · prospect named from attendees</text>
+        </svg>
+
+        <!-- ============ NARROW DIAGRAM ============ -->
+        <svg class="diag diag--narrow" viewBox="0 0 460 1290" role="img"
+             aria-label="The same pipeline as a vertical flow. Supabase's calls_for_analysis view is read two ways. One selection keeps completed calls of 240 seconds or more, giving 144 cleaned transcripts that feed an off-the-shelf BART summarizer and write output per call, with 128 of 144 summaries still saying SPEAKER_00. The other selection keeps all 305 completed calls, giving dataset_raw.json with reference summaries that feed a dataset builder, a LoRA fine-tune of Qwen3-8B and a generation step, writing output_v2 with the new summary beside the original and only 3 of 144 saying SPEAKER_00.">
+          <defs>
+            <marker id="arN" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+              <path d="M0 0 L10 5 L0 10 z" class="ah"/>
+            </marker>
+          </defs>
+
+          <!-- source -->
+          <text class="t-eye" x="20" y="14">SUPABASE SOURCE</text>
+          <rect class="d-box" x="20" y="20" width="420" height="106" rx="10"/>
+          <text class="t-narrow-t" x="36" y="48">calls_for_analysis</text>
+          <text class="t-narrow-s" x="36" y="70">Supabase view · PostgREST · apikey header</text>
+          <text class="t-narrow-s" x="36" y="92">305 completed rows · 144 with duration ≥ 240 s</text>
+          <text class="t-narrow-m" x="36" y="112" style="fill:var(--accent)">summmary column = the style target</text>
+          <path class="d-flow" d="M230 126 V176" marker-end="url(#arN)"/>
+
+          <!-- lane A -->
+          <text class="t-lane t-lane--a" x="20" y="166">PHASE 1 — OFF-THE-SHELF BART</text>
+          <rect class="d-box" x="20" y="180" width="420" height="56" rx="8"/>
+          <text class="t-narrow-m" x="36" y="203" style="fill:var(--ink);font-weight:600">completed AND duration ≥ 240 s</text>
+          <text class="t-narrow-s" x="36" y="223">→ 144 calls</text>
+          <path class="d-flow" d="M230 236 V252" marker-end="url(#arN)"/>
+
+          <rect class="d-box" x="20" y="256" width="420" height="56" rx="8"/>
+          <text class="t-narrow-m" x="36" y="279" style="fill:var(--ink);font-weight:600">data/cleaned/*.txt + cleaned_index.csv</text>
+          <text class="t-narrow-s" x="36" y="299">144 speaker-tagged transcripts</text>
+          <path class="d-flow" d="M230 312 V332" marker-end="url(#arN)"/>
+
+          <rect class="d-box d-box--base" x="20" y="336" width="420" height="66" rx="8"/>
+          <text class="t-narrow-t" x="36" y="362">Summarize</text>
+          <text class="t-narrow-s" x="36" y="384">summarize.py · knkarthick/MEETING_SUMMARY · BART-large</text>
+          <path class="d-flow" d="M230 402 V418" marker-end="url(#arN)"/>
+
+          <rect class="d-box d-box--base" x="20" y="422" width="420" height="66" rx="8"/>
+          <text class="t-narrow-t" x="36" y="448">Chunk and merge</text>
+          <text class="t-narrow-s" x="36" y="470">850-token sentence chunks · map each, then reduce</text>
+          <path class="d-flow" d="M230 488 V504" marker-end="url(#arN)"/>
+
+          <rect class="d-box d-box--out" x="20" y="508" width="420" height="66" rx="8"/>
+          <text class="t-narrow-t" x="36" y="534">Output</text>
+          <text class="t-narrow-s" x="36" y="556">output/&lt;call_id&gt;.json · 144 files + CSV index</text>
+          <path class="d-flow" d="M230 574 V590" marker-end="url(#arN)"/>
+
+          <rect class="d-bandA" x="20" y="594" width="420" height="60" rx="8"/>
+          <text class="t-bandA-l" x="36" y="618">BASELINE RESULT</text>
+          <text class="t-bandA-t" x="36" y="638">128 / 144 still say SPEAKER_00 · median 210 chars</text>
+
+          <!-- divider -->
+          <text class="t-eye" x="230" y="684" style="text-anchor:middle">SECOND TAP INTO THE SAME SOURCE</text>
+          <line class="d-dash" x1="20" y1="696" x2="440" y2="696"/>
+
+          <!-- lane B -->
+          <text class="t-lane t-lane--b" x="20" y="722">PHASE 2 — QWEN3-8B + LORA</text>
+          <rect class="d-box" x="20" y="736" width="420" height="56" rx="8"/>
+          <text class="t-narrow-m" x="36" y="759" style="fill:var(--ink);font-weight:600">completed only — no duration filter</text>
+          <text class="t-narrow-s" x="36" y="779">→ 305 rows</text>
+          <path class="d-flow" d="M230 792 V808" marker-end="url(#arN)"/>
+
+          <rect class="d-box" x="20" y="812" width="420" height="56" rx="8"/>
+          <text class="t-narrow-m" x="36" y="835" style="fill:var(--ink);font-weight:600">dataset_raw.json</text>
+          <text class="t-narrow-s" x="36" y="855">305 records · segments + target_summary</text>
+          <path class="d-flow" d="M230 868 V888" marker-end="url(#arN)"/>
+
+          <rect class="d-box d-box--ft" x="20" y="892" width="420" height="54" rx="8"/>
+          <text class="t-narrow-t" x="36" y="916">Query Supabase</text>
+          <text class="t-narrow-s" x="36" y="935">export_dataset.py · PostgREST paging</text>
+          <path class="d-flow" d="M230 946 V964" marker-end="url(#arN)"/>
+
+          <rect class="d-box d-box--ft" x="20" y="968" width="420" height="54" rx="8"/>
+          <text class="t-narrow-t" x="36" y="992">Build chat set</text>
+          <text class="t-narrow-s" x="36" y="1011">build_dataset.py · system / user / assistant · 268 / 23</text>
+          <path class="d-flow" d="M230 1022 V1040" marker-end="url(#arN)"/>
+
+          <rect class="d-box d-box--ft" x="20" y="1044" width="420" height="54" rx="8"/>
+          <text class="t-narrow-t" x="36" y="1068">LoRA fine-tune</text>
+          <text class="t-narrow-s" x="36" y="1087">train.py · r=16 α=32 · 4096 ctx · 24 GB GPU · bf16</text>
+          <path class="d-flow" d="M230 1098 V1116" marker-end="url(#arN)"/>
+
+          <rect class="d-box d-box--ft" x="20" y="1120" width="420" height="54" rx="8"/>
+          <text class="t-narrow-t" x="36" y="1144">Generate</text>
+          <text class="t-narrow-s" x="36" y="1163">predict.py · adapter on Qwen3-8B · 144 prompts</text>
+          <path class="d-flow" d="M230 1174 V1192" marker-end="url(#arN)"/>
+
+          <rect class="d-box d-box--out" x="20" y="1196" width="420" height="54" rx="8"/>
+          <text class="t-narrow-t" x="36" y="1220">Output</text>
+          <text class="t-narrow-s" x="36" y="1239">output_v2/&lt;call_id&gt;.json · new + original summary</text>
+          <path class="d-flow" d="M230 1250 V1266" marker-end="url(#arN)"/>
+
+          <rect class="d-bandB" x="20" y="1270" width="420" height="20" rx="6"/>
+          <text style="fill:var(--accent);font:600 10.5px var(--mono);letter-spacing:.07em" x="230" y="1284" text-anchor="middle">FINE-TUNED: 3 / 144 SAY SPEAKER_00 · MEDIAN 945 CHARS</text>
+        </svg>
+
+      </div>
+      <figcaption>
+        The two phases read the same Supabase view but need different things from it. Phase 1
+        wants words, so it takes the cleaned transcripts. Phase 2 wants a <em>target</em>, so it
+        takes the reference <code>summmary</code> column too — that column is the style it has to
+        learn, and it is also the generator this project replaces.
+      </figcaption>
+    </figure>
+
+    <div class="paths">
+      <div class="path">
+        <span class="tag">Phase 1 · the control</span>
+        <h3>What an off-the-shelf model gives you</h3>
+        <p>
+          <code>knkarthick/MEETING_SUMMARY</code> is <code>facebook/bart-large-xsum</code> fine-tuned
+          on meeting and dialogue corpora — a 406M-parameter encoder-decoder with a hard
+          1024-token input window.
+        </p>
+        <p>
+          Transcripts blow past that window, so <code>summarize.py</code> splits them into
+          ~850-token chunks on sentence boundaries, summarizes each chunk, joins the results,
+          and re-summarizes until the merge fits in one pass. A map-reduce over the call.
+        </p>
+        <p>
+          It produces grammatical summaries and has no idea what it is looking at. It writes
+          <code>SPEAKER_00</code> because that is what the input says, and it never learns the
+          prospect's name.
+        </p>
+      </div>
+
+      <div class="path path--ft">
+        <span class="tag">Phase 2 · the actual goal</span>
+        <h3>Teaching a model the firm's house style</h3>
+        <p>
+          The reference summaries in Supabase were written by a large model and encode a real
+          convention: third person, prospect named, specifics kept, closing with
+          <em>Next steps:</em> and <em>Outcome signal:</em>.
+        </p>
+        <p>
+          So the 305 calls become supervised pairs — the transcript plus metadata as input, the
+          reference summary as the target — and a LoRA adapter on Qwen3-8B learns the
+          transformation. Training is cheap: rank-16 adapters across all linear layers, 3 epochs,
+          fits on a single 24&nbsp;GB card.
+        </p>
+        <p>
+          The input format is the interesting part. Turns are re-labelled before the model ever
+          sees them: prospect turns get the name from <code>attendees[0]</code>, the salesperson's
+          turns get the literal word <code>rep</code>. The model is never asked to guess who is
+          who.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section id="stages">
+    <h2><span class="num">02</span>Every stage, and what it moves</h2>
+    <p class="lede">
+      Seven scripts. Two of them are throwaway probes that were written to answer a question
+      about the training library and then kept.
+    </p>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Script</th><th>Reads</th><th>Writes</th><th>What it does</th></tr>
+        </thead>
+        <tbody>
+          <tr class="phase"><td colspan="4">Phase 1 — baseline summarization</td></tr>
+          <tr>
+            <td>summarize.py</td>
+            <td>data/cleaned/*.txt<br>cleaned_index.csv</td>
+            <td>output/&lt;id&gt;.json<br>output/_all_summaries.csv</td>
+            <td>Loads BART, auto-selects cuda or cpu, and summarizes each transcript. Long calls go through the chunk-and-merge path; short ones are summarized directly. Emits one JSON per call (summary plus the full transcript) and a flat CSV index.</td>
+          </tr>
+          <tr class="phase"><td colspan="4">Phase 2 — dataset construction</td></tr>
+          <tr>
+            <td>export_dataset.py</td>
+            <td>Supabase<br>calls_for_analysis</td>
+            <td>dataset_raw.json</td>
+            <td>Pages through PostgREST with a <code>Range</code> header, 100 rows at a time, keeping only <code>transcription_status = completed</code>. Writes 305 untouched records and prints a size profile to inform the truncation design. Uses urllib, not a browser-shaped client, because the <code>sb_secret_</code> key 401s on browser-like User-Agents.</td>
+          </tr>
+          <tr>
+            <td>build_dataset.py</td>
+            <td>dataset_raw.json</td>
+            <td>train.jsonl<br>val.jsonl</td>
+            <td>Renders each record into a three-message chat: a system prompt carrying the house-style rules, a user message with the deal stage plus the turn-labelled transcript, and the reference summary as the assistant turn. Drops rambling targets, truncates transcripts at 12,000 characters, and splits 92/8 with a fixed seed.</td>
+          </tr>
+          <tr class="phase"><td colspan="4">Phase 2 — training</td></tr>
+          <tr>
+            <td>train.py</td>
+            <td>train.jsonl<br>val.jsonl</td>
+            <td>qwen3-8b-lora/</td>
+            <td>Wraps Qwen3-8B in a rank-16 LoRA (α=32, dropout 0.05, all linear layers) and runs SFT with loss masked to the assistant turn only. Overrides Qwen3's shipped chat template with a local one. <code>--smoke</code> validates the config in two steps before a real run.</td>
+          </tr>
+          <tr class="phase"><td colspan="4">Phase 2 — inference and assembly</td></tr>
+          <tr>
+            <td>make_infer_input.py</td>
+            <td>dataset_raw.json<br>cleaned_index.csv</td>
+            <td>infer_input.jsonl</td>
+            <td>Builds the 144 inference prompts, importing <code>build_model_input()</code> from the dataset builder rather than reimplementing it, so training text and inference text are byte-for-byte the same shape. Falls back to rebuilding segments from the cleaned <code>.txt</code> when a record has none.</td>
+          </tr>
+          <tr>
+            <td>predict.py</td>
+            <td>infer_input.jsonl<br>qwen3-8b-lora/</td>
+            <td>results.jsonl</td>
+            <td>Loads the base model plus the adapter, renders the prompt with thinking disabled, and generates in batches of four. Slices the prompt off the output so only the continuation is kept. This is the script that runs on the GPU pod.</td>
+          </tr>
+          <tr>
+            <td>assemble_output.py</td>
+            <td>results.jsonl<br>cleaned_index.csv<br>_supabase_summaries.json</td>
+            <td>output_v2/&lt;id&gt;.json<br>output_v2/_all_summaries.csv</td>
+            <td>Merges generated summaries with call metadata and the original Supabase summary, so each file shows the new and reference text side by side. Flags any summary under 50 characters as a near-empty failure.</td>
+          </tr>
+          <tr class="phase"><td colspan="4">Probes — written to answer a question, then kept</td></tr>
+          <tr>
+            <td>_introspect.py</td>
+            <td>trl (installed)</td>
+            <td>stdout</td>
+            <td>Prints the fields <code>SFTConfig</code> actually exposes. Confirmed <code>assistant_only_loss</code> and <code>max_length</code> exist and that <code>chat_template_kwargs</code> had been removed — which is why the chat template is defined locally.</td>
+          </tr>
+          <tr>
+            <td>_test_template.py</td>
+            <td>Qwen3-8B tokenizer</td>
+            <td>stdout</td>
+            <td>Established that the shipped template defaults thinking <em>on</em> when the flag is undefined, and that prepending <code>{% set enable_thinking = false %}</code> forces it off. The finding that the training template had no <code>{% generation %}</code> markers came from the same check.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="compare">
+    <h2><span class="num">03</span>One call, three summaries</h2>
+    <p class="lede">
+      Call <code>115797434638</code> — a 280-second outbound call, 3,885 characters of transcript.
+      This is the whole project in one screen.
+    </p>
+
+    <div class="compare">
+      <div class="cmp cmp--base">
+        <div class="head">
+          <span class="who">BART, off the shelf</span>
+          <span class="meta">output/115797434638.json · 137 chars</span>
+          <span class="verdict verdict--fail">No names, no outcome</span>
+        </div>
+        <p class="body is-fail">SPEAKER_00 was in Oklahoma City last week. He will be in Plano on October 20th and then in Dallas on the third Tuesday or second Tuesday of December.</p>
+        <p class="foot">It read the transcript correctly and still could not name the person or say what the call was for.</p>
+      </div>
+
+      <div class="cmp cmp--ft">
+        <div class="head">
+          <span class="who">Qwen3-8B + LoRA</span>
+          <span class="meta">output_v2/115797434638.json · 411 chars</span>
+          <span class="verdict verdict--ok">House style</span>
+        </div>
+        <p class="body">An illustrative example call summary appears here in the original workspace; the real one contains client data and is not reproduced in this repository.</p>
+        <p class="foot">Named the prospect, kept the deal specifics, and used the vocabulary of the domain — balance sheet, operated and royalty assets.</p>
+      </div>
+
+      <div class="cmp cmp--ref">
+        <div class="head">
+          <span class="who">Supabase reference</span>
+          <span class="meta">_supabase_summaries.json · the training target · 1,102 chars</span>
+          <span class="verdict">The style being imitated</span>
+        </div>
+        <p class="body">An illustrative example call summary appears here in the original workspace; the real one contains client data and is not reproduced in this repository.</p>
+        <p class="foot">
+          Notice that the LoRA picked up the structure and dropped the density: it kept the
+          narrative and the market-benchmark beat but discarded the specific figures. The
+          reference is also longer than the 500–1,200 character guidance in the system prompt,
+          which is a theme in the findings below.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section id="findings">
+    <h2><span class="num">04</span>What the numbers actually say</h2>
+    <p class="lede">
+      Measured across all 144 delivered calls by comparing <code>output/</code> and
+      <code>output_v2/</code> directly.
+    </p>
+
+    <div class="findings">
+      <div class="find">
+        <span class="f-k">The clear win</span>
+        <span class="f-v">
+          <b>128 of 144 → 3 of 144.</b> Speaker-tag leakage in the baseline is near-total; the
+          fine-tune almost eliminates it. This is the single metric that justifies the whole
+          exercise.
+        </span>
+      </div>
+      <div class="find">
+        <span class="f-k">Length</span>
+        <span class="f-v">
+          Baseline median <b>210 chars</b>, fine-tuned median <b>945 chars</b>, reference median
+          <b>734 chars</b>. The fine-tune landed inside the house-style band rather than at its
+          edge.
+        </span>
+      </div>
+      <div class="find">
+        <span class="f-k">Format compliance is partial</span>
+        <span class="f-v">
+          <b>112 of 144</b> summaries contain a <code>Next steps:</code> line, but only
+          <b>33 of 144</b> contain <code>Outcome signal:</code>. The narrative shape transferred
+          well; the closing convention did not. Worth knowing before anyone treats the output as
+          CRM-ready.
+        </span>
+      </div>
+      <div class="find">
+        <span class="f-k">Style fit, not generalization</span>
+        <span class="f-v">
+          Of the 144 delivered calls, <b>122 were in the LoRA's training rows</b>, <b>15 landed in
+          the held-out validation split</b>, and <b>7 were dropped</b> by the outlier filter. So
+          the aggregate numbers above are mostly a style-fit measurement — how well the model
+          reproduces a style on calls it saw. Only the 15 held-out calls measure generalization,
+          which is too few to report as a number.
+        </span>
+      </div>
+      <div class="find">
+        <span class="f-k">The reference set has its own quality problem</span>
+        <span class="f-v">
+          The reference summaries run up to <b>7,208 characters</b> against a 500–1,200 guidance,
+          and several are padded with negation filler — <em>not discussed</em>, <em>not
+          mentioned</em>, <em>no competing vendors</em>. Training on them would teach the model to
+          ramble, so <b>13 of 305 targets were dropped</b> by a heuristic: longer than 1,800
+          characters, or four or more negation-filler markers.
+        </span>
+      </div>
+      <div class="find">
+        <span class="f-k">Truncation is real but bounded</span>
+        <span class="f-v">
+          <b>18 of 305 transcripts</b> exceed the 12,000-character cap and lose their tail, which
+          for a sales call is where next steps and outcome usually live. Median transcript is
+          2,403 characters, so this affects the long tail only — but it is a silent cut, marked
+          in the prompt as <code>[...transcript truncated...]</code>.
+        </span>
+      </div>
+      <div class="find">
+        <span class="f-k">The input is deliberately asymmetric</span>
+        <span class="f-v">
+          The deal <em>stage</em> is fed in; the deal <em>outcome</em> is withheld. Outcome is the
+          answer the model is supposed to infer from the call, so including it would make the
+          task trivial and the evaluation meaningless.
+        </span>
+      </div>
+      <div class="find">
+        <span class="f-k">Not under version control</span>
+        <span class="f-v">
+          This directory is <b>not a git repository</b>, unlike its two sibling projects.
+          305 training records, 144 output pairs and a 2.4&nbsp;MB adapter sit here unversioned.
+        </span>
+      </div>
+    </div>
+  </section>
+
+  <section id="context">
+    <h2><span class="num">05</span>Where the data came from, and where this went next</h2>
+    <p class="lede">
+      This is the middle project of three in <code>C:\Projects</code>, and reading it alone
+      hides the upstream and downstream halves.
+    </p>
+
+    <div class="cols">
+      <div>
+        <h3>Upstream</h3>
+        <p style="font-size:14.5px">
+          Everything starts in Supabase, in the <code>calls_for_analysis</code> view — a view, not
+          the <code>calls</code> table, which is a separate and disjoint source. Each row carries
+          the ASR transcript in several shapes, speaker-labelled segments, an attendees list, an
+          entities blob, a speaker mapping, a deal stage label, and the reference summary.
+        </p>
+        <p style="font-size:14.5px">
+          The column is misspelled <code>summmary</code>, with three m's. Every script that
+          touches it carries the typo.
+        </p>
+        <p style="font-size:14.5px">
+          The cleaning step that produced <code>data/cleaned/*.txt</code> — fillers stripped,
+          turns kept — happened outside this repo, in the sibling <code>call-summarizer</code>
+          project's extraction work.
+        </p>
+      </div>
+      <div>
+        <h3>Two filters, two populations</h3>
+        <ul class="plain">
+          <li><b>144 calls</b> — <code>completed AND duration_seconds ≥ 240</code>. Answered and at least four minutes long, which excludes voicemail and no-audio calls. This is the deliverable set.</li>
+          <li><b>305 calls</b> — <code>completed</code> only, no duration filter. This is the training set: more data, and the outliers do not matter as much when they are going to be filtered.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Downstream</h3>
+        <p style="font-size:14.5px">
+          <code>call-summarizer</code> picks this up and adds what is missing here: a frozen eval
+          set, a scorer measuring ROUGE, copy rate, duplicate rate and grounding, and a bootstrap
+          confidence interval. Its own notes state plainly that its first ROUGE win was measured
+          on calls that were all in the training rows — the same caveat recorded in the findings
+          above.
+        </p>
+        <p style="font-size:14.5px">
+          Its README also records where the work was heading: a held-out split, then a smaller
+          <code>Qwen3-4B-Instruct</code> adapter on Runpod. Earlier in the sequence,
+          <code>t5-call-summarizer</code> took the T5 route.
+        </p>
+      </div>
+      <div>
+        <h3>What lives where</h3>
+        <ul class="plain">
+          <li><code>data/cleaned/</code> — 144 transcripts, one file per call</li>
+          <li><code>data/cleaned_index.csv</code> — metadata for those 144</li>
+          <li><code>output/</code> — Phase 1 baseline, 144 JSONs + CSV + a zip of the whole set</li>
+          <li><code>output_v2/</code> — Phase 2 result, new summary beside the original</li>
+          <li><code>finetune/dataset_raw.json</code> — 305 raw training records</li>
+          <li><code>finetune/qwen3-8b-lora/</code> — the adapter itself, plus a local chat template</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="note">
+      <p>
+        A note on reading any of the generated summaries: the reference summaries are a style
+        target, not ground truth. They were written by a large model and do contain errors, so
+        "matches the reference" measures imitation, not accuracy. The LoRA faithfully inherited
+        that property along with everything else.
+      </p>
+    </div>
+  </section>
+
+</div>

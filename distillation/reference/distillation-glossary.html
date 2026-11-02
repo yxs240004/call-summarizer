@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Distillation Glossary</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<main class="lesson">
+
+  <p class="eyebrow">Reference &middot; <a href="../MISSION.md">Distilling the summarizer</a></p>
+
+  <h1>Distillation glossary
+    <span class="sub">The vocabulary this course uses — and the two or three words
+    that decide which method you are allowed to use.</span>
+  </h1>
+
+  <p class="lede">
+    Every lesson in this workspace uses these terms with these meanings. Where a term
+    is ambiguous in the wider literature, the ambiguity is called out rather than
+    smoothed over, because most of it is the difference between two incompatible
+    recipes.
+  </p>
+
+  <div class="note">
+    <span class="note__label">The one-line distinction</span>
+    <p>
+      <strong>Soft targets</strong> copy the teacher's probability distribution and
+      need a shared output vocabulary. <strong>Hard targets</strong> copy the teacher's
+      generated text and need nothing shared at all. Your teacher and student have
+      vocabularies of 151,669 and 248,320, so only the second is available to you.
+    </p>
+  </div>
+
+  <h2><span class="num">01</span>The cast</h2>
+
+  <dl class="glossary">
+    <dt>Knowledge distillation <span class="tag">the whole idea</span></dt>
+    <dd>
+      <p>
+        Training a small model (the student) to reproduce the behaviour of a large
+        one (the teacher), rather than training it on human-written labels alone. The
+        premise is that a strong model's outputs encode things the labels do not — how
+        it hedges, what it considers important, which details it drops.
+      </p>
+      <span class="see">Origin: <a href="https://arxiv.org/abs/1503.02531">Hinton, Vinyals &amp; Dean, 2015</a></span>
+    </dd>
+
+    <dt>Teacher <span class="tag">this project</span></dt>
+    <dd>
+      <p>
+        Your fine-tuned <strong>Qwen3-8B + LoRA</strong> in
+        <code>finetune/qwen3-8b-lora/</code>. It is the model whose house style and
+        judgement you are trying to preserve.
+      </p>
+    </dd>
+
+    <dt>Student <span class="tag">this project</span></dt>
+    <dd>
+      <p>
+        <strong>Qwen3.5-2B</strong> — 2B parameters, a hybrid Gated DeltaNet /
+        Gated Attention architecture, vocab 248,320. The model that has to run on your
+        laptop's CPU.
+      </p>
+      <span class="see">Its tokenizer is what closes the soft-target route — see <a href="#vocab">vocabulary mismatch</a>.</span>
+    </dd>
+  </dl>
+
+  <h2><span class="num">02</span>What crosses the boundary</h2>
+
+  <dl class="glossary">
+    <dt>Soft targets <span class="tag tag--accent">logit distillation</span></dt>
+    <dd>
+      <p>
+        The teacher's full probability distribution over the next token — "this token
+        70%, that one 20%". Richer than a single right answer, because the tail of the
+        distribution carries the teacher's uncertainty.
+      </p>
+      <p>
+        Requires the student to have the <em>same</em> output vocabulary as the
+        teacher, so that "token 4127" denotes the same event in both.
+      </p>
+      <span class="see">Also called: logit matching, response-based distillation</span>
+    </dd>
+
+    <dt>Hard targets <span class="tag tag--accent">sequence-level</span></dt>
+    <dd>
+      <p>
+        Finished text. The teacher generates a summary; that summary is used as the
+        training label. Nothing needs to be shared between the two models but the
+        ability to read text.
+      </p>
+      <span class="see">Also called: sequence-level knowledge distillation, Seq-KD</span>
+    </dd>
+
+    <dt>Temperature <span class="tag">soft targets only</span></dt>
+    <dd>
+      <p>
+        Divides the teacher's logits before softmax, flattening the distribution so the
+        small probabilities survive. Hinton's key trick. Irrelevant to you — it is a
+        knob on a method you cannot use.
+      </p>
+      <span class="see">Listed so you recognise it when you meet it in a paper.</span>
+    </dd>
+
+    <dt id="vocab">Vocabulary mismatch <span class="tag tag--stop">your blocker</span></dt>
+    <dd>
+      <p>
+        Two models whose BPE merge tables were learned separately will split the same
+        text into different tokens, so no index correspondence exists between them.
+        This is not a matter of logit distillation being harder — it is
+        <em>undefined</em>. There is no loss function to write.
+      </p>
+      <span class="see">Measured: teacher 151,669 · student 248,320. Verify with the exercise in <a href="../lessons/0001-text-not-logits.html">&sect;04 of Lesson 01</a>.</span>
+    </dd>
+
+    <dt>Pseudo-labels <span class="tag">the product</span></dt>
+    <dd>
+      <p>
+        Labels that machine generated rather than a human wrote. In Seq-KD they are the
+        teacher's summaries, and they <em>replace</em> the reference summaries as
+        training targets — not supplement them.
+      </p>
+      <span class="see">Also called: synthetic data, silver labels, distillation targets</span>
+    </dd>
+  </dl>
+
+  <h2><span class="num">03</span>How the teacher generates them</h2>
+
+  <dl class="glossary">
+    <dt>Beam search <span class="tag">teacher-side</span></dt>
+    <dd>
+      <p>
+        Decoding that keeps the <em>k</em> highest-scoring partial sequences alive at
+        each step and returns the best complete one. Kim &amp; Rush use it
+        teacher-side because high-probability sequences make cleaner teaching targets.
+      </p>
+      <span class="see">Contrast: your existing <code>results.jsonl</code> used sampling at temperature 0.7 — tuned for deliverable quality, not target quality.</span>
+    </dd>
+
+    <dt>Greedy decoding <span class="tag tag--accent">student-side, measured</span></dt>
+    <dd>
+      <p>
+        Always take the single most likely token. Kim &amp; Rush found a Seq-KD student
+        needs nothing better at inference &mdash; which matters enormously on a CPU, where
+        beam search multiplies compute by the beam width. <strong>&ldquo;Free&rdquo; in that
+        claim means free of beam-search compute, not free of consequences</strong>, and this
+        project settled the difference by running it (2026-10-13). Serving the shipped
+        Q4_K_M artifact greedily &mdash; same weights, engine and seed, decoding the only
+        variable &mdash; cut ungrounded names from <strong>37 on 26 calls to 24 on 16
+        calls</strong> and ungrounded numbers from <strong>105 to 76</strong>, at an
+        identical output length (108.7 words against 108.0). ROUGE did not improve in any
+        way the run could detect: ROUGE-2 moved +0.0119 [+0.0035, +0.0193] while ROUGE-1
+        and ROUGE-L both tied, so the defensible sentence is <em>not worse</em>, not
+        <em>better</em>. The costs are real on both sides: one of 144 calls hit the
+        900-token cap and ended mid-sentence where the sampled run had none (greedy cannot
+        escape a loop it enters &mdash; the degeneration
+        <a href="https://arxiv.org/abs/1904.09751">Holtzman et al.</a> describe), copy rate
+        rose slightly (0.0158 against 0.0117), and it takes <strong>1.16&times;</strong> the
+        wall time (median 18.5 s against 16.0 s). What it buys is determinism. It is also a
+        <em>net</em> reduction rather than a per-call one: sampling invents more names on 19
+        calls, greedy on 8, 117 tie.
+      </p>
+      <span class="see">See <a href="../lessons/0006-the-knob-you-never-turned.html">lesson 06</a>
+        and <code>finetune/scores_greedy.json</code>. Contrast: <code>results.jsonl</code> used
+        sampling at temperature 0.7, which was never a measured choice until this run made it one.</span>
+    </dd>
+
+    <dt>On-policy vs off-policy <span class="tag">if you go further</span></dt>
+    <dd>
+      <p>
+        <strong>Off-policy</strong>: the student trains on the teacher's outputs for the
+        training inputs (what Seq-KD does). <strong>On-policy</strong>: the student
+        generates its own outputs and the teacher scores them, so training and inference
+        see the same distribution.
+      </p>
+      <p>
+        In TRL's <code>GKDTrainer</code>, <code>lmbda</code> interpolates: 0 is off-policy
+        SFT, 1 is fully on-policy.
+      </p>
+      <span class="see"><a href="https://arxiv.org/abs/2306.13649">On-Policy Distillation of Language Models (GKD)</a></span>
+    </dd>
+  </dl>
+
+  <h2><span class="num">04</span>Failure modes</h2>
+
+  <dl class="glossary">
+    <dt>Abstractiveness <span class="tag tag--stop">the trap</span></dt>
+    <dd>
+      <p>
+        How much a summary <em>rephrases</em> rather than <em>copies</em>. High
+        abstractiveness means the model is genuinely summarizing; low means it is
+        selecting sentences from the transcript.
+      </p>
+      <span class="see">DisCal found naive Seq-KD <em>reduces</em> abstractiveness.</span>
+    </dd>
+
+    <dt>Copy rate <span class="tag">your existing metric</span></dt>
+    <dd>
+      <p>
+        The share of summary n-grams that appear verbatim in the transcript. It is the
+        operational proxy for (inverse) abstractiveness, and your <code>eval/</code>
+        scorer already reports it — which is what makes the DisCal trap testable for you
+        rather than theoretical.
+      </p>
+      <span class="see"><a href="https://arxiv.org/html/2310.13760">DisCal, 2023</a></span>
+    </dd>
+
+    <dt>Forward vs reverse KL <span class="tag">capacity mismatch</span></dt>
+    <dd>
+      <p>
+        Which direction the divergence is measured. Standard distillation minimizes
+        forward KL, which forces the student to cover everything the teacher does —
+        bad when the student is much smaller. Reverse KL lets the student be
+        confidently narrow instead, and MiniLLM found it works better under large
+        capacity gaps.
+      </p>
+      <span class="see"><a href="https://arxiv.org/abs/2306.08543">MiniLLM, 2023</a> · applies to soft-target distillation only.</span>
+    </dd>
+  </dl>
+
+  <h2><span class="num">05</span>Project terms</h2>
+
+  <dl class="glossary">
+    <dt>House style <span class="tag">what you are preserving</span></dt>
+    <dd>
+      <p>
+        The project's summary conventions: 500–1200 characters, no <code>SPEAKER_00</code>
+        tags, a named speaker where identifiable, and closing lines like
+        <em>Next steps</em> / <em>Outcome signal</em>. The distillation is only
+        interesting if the 2B keeps this.
+      </p>
+    </dd>
+
+    <dt>Deliverable set vs training set <span class="tag">the coverage gap</span></dt>
+    <dd>
+      <p>
+        <strong>Deliverable</strong>: the 144 calls the project was built to summarize —
+        these are what <code>results.jsonl</code> holds teacher output for.
+        <strong>Training</strong>: the 291 examples in <code>train.jsonl</code> +
+        <code>val.jsonl</code>. The teacher has answered roughly 122 of the 291, so a
+        teacher inference pass is required work, not a formality.
+      </p>
+    </dd>
+
+    <dt>GGUF / quantization <span class="tag">deployment</span></dt>
+    <dd>
+      <p>
+        The file format and weight-compression used by llama.cpp, the class of runtime
+        that runs models on CPU without PyTorch. The student ships as a
+        <strong>1.27&nbsp;GB</strong> Q4_K_M file against <strong>3.78&nbsp;GB</strong> for the
+        same weights in f16 &mdash; a factor of 2.96. About a quarter of either file is the
+        tied embedding, because the vocabulary is 248,320.
+      </p>
+      <p>
+        It costs a measurable amount, and the amount is now known rather than assumed. Scored on
+        the same 144 calls, references and scorer as every other number here, the deployed file
+        takes <strong>0.4285 ROUGE-1 against its own 16-bit self's 0.4447</strong>, served
+        through the same engine at the same seed &mdash; <strong>96% of itself, 89% of its
+        teacher</strong> (0.4784). The gap is <strong>+0.0162 [+0.0057, +0.0266]</strong> on a
+        paired bootstrap: small, and real. The engine and the draw, measured the same way, are
+        worth nothing (&minus;0.0048, a tie).
+      </p>
+      <p>
+        What it buys is <strong>speed, and only speed</strong>: f16 costs 1.85&times; the wall
+        time per call (a median 29.0&nbsp;s against 15.7&nbsp;s), of which prefill is
+        1.54&times; and decode 2.51&times;. An earlier version of this entry also claimed
+        <strong>robustness</strong> &mdash; that a memory-mapped 3.78&nbsp;GB file could be paged
+        out under pressure and collapse to 0.1&nbsp;tok/s where the 1.27&nbsp;GB file stays
+        resident. <strong>Withdrawn 2026-10-13:</strong> the outlier behind it was a 1,936-second Windows
+        Modern Standby suspend, entered after decoding had already begun, and no page was
+        evicted. Size buys speed; it does not buy reliability.
+      </p>
+      <span class="see">Supported, and no longer an open risk: llama.cpp merged native <code>qwen35</code> support in February 2026, and a fused CPU <code>GATED_DELTA_NET</code> op in March 2026, worth +34–41% generation on a Raspberry Pi 5. There is no official Qwen GGUF yet; bartowski and Unsloth are the publishers, and Unsloth also ships MTP speculative-decoding builds.</span>
+    </dd>
+
+    <dt>Prefill vs decode <span class="tag">where the CPU time goes</span></dt>
+    <dd>
+      <p>
+        <strong>Prefill</strong> is the model reading your transcript; <strong>decode</strong>
+        is it writing the summary. On a CPU these are much closer in speed than on a GPU —
+        measured here at roughly 6&times; rather than 20&times; — and a transcript is far longer
+        than a summary. So prefill, not decode, is the larger share of the wall clock.
+      </p>
+      <p>
+        Measured on the deploy target — an Intel Core Ultra 9 285H, 16 threads, 100% CPU with
+        no iGPU offload — over all 144 deliverable calls, the deployed student (Qwen3.5-2B,
+        Q4_K_M) costs a <strong>median 16.0&nbsp;s per call</strong> with a <strong>median 67%
+        of it prefill</strong>: p90 26.6&nbsp;s, worst case 33.0&nbsp;s. Token-weighted
+        throughput was <strong>163&nbsp;tok/s prefill</strong> and <strong>27.7&nbsp;tok/s
+        decode</strong>, on a median prompt of 1,680 tokens. The second instrument,
+        <code>llama-bench</code> on the same GGUF, lands in the same region but not on the same
+        point — <code>pp1764</code> 206&nbsp;tok/s against the runtime's 163, <code>tg128</code>
+        21.8 against 27.7 — so the two agree to within about a third. Close enough that neither
+        is measuring a different machine; far enough that a throughput figure should never be
+        quoted without naming the instrument that produced it.
+      </p>
+      <p>
+        An earlier revision of this entry gave ~74&nbsp;s per call at ~70% prefill, taken by
+        analogy from an RK3588 board. It was right about the <em>shape</em> — prefill is still
+        the larger half — and about 5&times; wrong about the magnitude, and it was never a
+        measurement of the machine the model ships on.
+      </p>
+      <span class="see">Consequence: prompt length is a first-class lever, not a rounding error — and caching only helps an <em>exact</em> repeat. Prefill scales with the full prompt length rather than with a shared preamble, so every new call pays its own. That is also why Qwen3.5-2B's chunked linear attention is an advantage here: most of its layers keep a constant-size state instead of a growing KV cache.</span>
+    </dd>
+  </dl>
+
+  <h2><span class="num">06</span>Reading a training run</h2>
+
+  <dl class="glossary">
+    <dt>Training loss <span class="tag tag--accent">the number that can lie</span></dt>
+    <dd>
+      <p>
+        The mean cross-entropy over the tokens the model was <em>shown</em>, at the run
+        position you are reading. It is the objective the optimizer is minimising, which is
+        exactly why it is not evidence of usefulness: the model is allowed to memorise, and
+        memorising reduces it perfectly. In this project's arm run it was logged as the
+        mean of the last 10 steps' micro-batches, with the window reset at every print — so
+        a logged point is a window mean and, except in the last epoch, never covers a whole
+        epoch.
+      </p>
+      <span class="see">Consequence: it can always be driven down, and a lower one is not a better model. At epoch 3 the control arm's training loss was 0.270 against the blend's 0.606 — and the control is the arm you must not ship.</span>
+    </dd>
+
+    <dt>Validation loss <span class="tag">the number you hope predicts usefulness</span></dt>
+    <dd>
+      <p>
+        The same cross-entropy, measured on rows held out of training — 12 calls here, with
+        train/val call overlap measured at 0. It is the only one of the two numbers that is
+        even attempting to answer "will this be any good on call 292?", and it moves
+        independently of training loss, which is what makes a run readable at all.
+      </p>
+      <span class="see">Consequence: it is the one allowed to change your mind. On this run it rose in <em>both</em> arms — blend 1.579 &rarr; 1.709, control 1.633 &rarr; 2.326 — so it never licensed shipping either arm as trained; what it separated was how fast each was going wrong.</span>
+    </dd>
+
+    <dt>Generalization gap <span class="tag tag--accent">the readable quantity</span></dt>
+    <dd>
+      <p>
+        Validation loss minus training loss, compared for the same run. It is more portable
+        between two arms than either loss alone, because the shared difficulty of the same
+        12 held-out rows cancels out and what is left is how much the model has traded away
+        to fit what it saw. It also makes a single seed less fatal, since both arms are
+        reading identical validation rows.
+      </p>
+      <span class="see">Consequence: this is the quantity that made the arm comparison readable without error bars. At epoch 3 the gap was +1.10 for the blend against +2.06 for the control — the control was nearly twice as far from the held-out rows, on the same 12 rows, in the same step count.</span>
+    </dd>
+
+    <dt>Overfitting <span class="tag tag--stop">train down, val up</span></dt>
+    <dd>
+      <p>
+        Training loss falling while validation loss rises: the model buying performance on
+        the rows it was shown at the price of performance on rows it was not. It is a thing
+        that happens over <em>steps</em>, not a property that small datasets have — the
+        first epoch of this run shows neither arm overfitting, the control's gap still
+        slightly negative.
+      </p>
+      <span class="see">Consequence: the schedule is the alibi to rule out first. This run's learning rate decayed monotonically (2e-4 cosine to 0), so anything driven by step size should have been settling; validation loss climbing under a decaying schedule is the model moving toward the training calls and away from the others.</span>
+    </dd>
+  </dl>
+
+  <h2><span class="num">07</span>Judging two systems</h2>
+
+  <dl class="glossary">
+    <dt>Paired bootstrap <span class="tag">the test that answers "is it better?"</span></dt>
+    <dd>
+      <p>
+        Resample the <em>per-call differences</em> between two systems with replacement,
+        recompute their mean, and repeat — 10,000 times here. The middle 95% of those
+        resampled means is the interval. It is paired because the difference is taken call by
+        call: the call's difficulty appears in both terms of the subtraction and cancels out.
+        Pooling both systems' scores and resampling that instead throws the pairing away and
+        returns a wider interval for identical data.
+      </p>
+      <span class="see">Consequence: this is the only instrument on this page that can say a difference is real. Blend &minus; control over the same 144 calls is +0.0223 [+0.0087, +0.0365]; recomputing the four comparisons from the per-call rows reproduces the harness's own two published intervals to within 0.0007.</span>
+    </dd>
+
+    <dt>Confidence interval <span class="tag">an interval, not a point</span></dt>
+    <dd>
+      <p>
+        The 2.5th-to-97.5th percentile of the resampled means — where the mean difference
+        plausibly lies given <em>these</em> calls. It is a statement about the mean, never
+        about any individual call, and it does not bound the individual differences: they are
+        far more spread out than the interval on their average.
+      </p>
+      <span class="see">Consequence: the whole reading rule is one line — <strong>if the interval contains zero, the difference is not distinguishable from noise at this sample size.</strong> That is not evidence of equality, only that 144 calls cannot separate them. Two of the four comparisons here cross zero (qwen4b &minus; blend +0.0011 [&minus;0.0112, +0.0134]; blend &minus; honest +0.0027 [&minus;0.0100, +0.0160]).</span>
+    </dd>
+
+    <dt>Win/loss count <span class="tag">the number that lies</span></dt>
+    <dd>
+      <p>
+        How many of the paired calls each system scored higher on. Cheap, intuitive, and not a
+        test: it reports the <em>direction</em> of the majority and nothing about its size, so
+        a system can win most calls and still be level overall.
+      </p>
+      <span class="see">Consequence: on these 144 calls Qwen3-4B beats the student on 81 of them and the paired test calls it a tie — because those wins average +0.0521 against losses averaging &minus;0.0645. The count carries information only when the count <em>and</em> the average margin agree on the direction, as they do for blend &minus; control (84/60, wins larger) and blend &minus; teacher (42/102, losses larger).</span>
+    </dd>
+
+    <dt>Tail <span class="tag tag--stop">the part a mean hides</span></dt>
+    <dd>
+      <p>
+        The bottom of a system's per-call distribution: the calls it handles badly. A mean
+        cannot distinguish a system that is uniformly mediocre from one that is usually good
+        and occasionally broken, and the two are very different things to ship.
+      </p>
+      <span class="see">Consequence: the student is more than 0.10 behind its teacher on 29 of 144 calls, scores below 0.25 on 11 of them, and bottoms out at 0.047 (the teacher's floor is 0.062, its median 0.4628). Read those calls before shipping either number — a mean of 0.4399 does not say whether the bad ones are rare embarrassments or a systematic failure on one kind of call.</span>
+    </dd>
+  </dl>
+
+  <hr>
+
+  <p>
+    Used across the course: <a href="../lessons/0001-text-not-logits.html">Lesson 01 —
+    Text, not logits</a>, <a href="../lessons/0003-reading-a-loss-curve.html">Lesson 03 —
+    Reading a loss curve</a> (§06), and <a href="../lessons/0004-evaluate-honestly.html">Lesson
+    04 — Evaluate honestly</a> (§07). The lessons that follow use them too.
+  </p>
+
+  <footer class="lesson-foot">Reference &middot; maintained alongside the lessons &middot; last revised 2026-10-12</footer>
+</main>
+</body>
+</html>

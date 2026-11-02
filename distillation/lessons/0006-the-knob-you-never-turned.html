@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 06 — The knob you never turned</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+/* Figure-local classes. Colours come from lesson.css tokens, so both themes work. */
+.fig{ margin:1.9rem 0 }
+.fig svg{ display:block; width:100%; height:auto; max-width:100% }
+.b-samp{ fill:var(--rule-2) }
+.b-grd{ fill:var(--accent) }
+.b-lab{ fill:var(--ink-soft); font-family:var(--display); font-size:11px; text-anchor:end }
+.b-val{ fill:var(--ink); font-family:var(--mono); font-size:11px; font-weight:600 }
+.b-key{ fill:var(--muted); font-family:var(--mono); font-size:10px }
+.b-note{ fill:var(--muted); font-family:var(--display); font-size:10.5px }
+.b-axis{ stroke:var(--rule-2); stroke-width:1 }
+</style>
+</head>
+<body>
+<main class="lesson">
+
+  <p class="eyebrow">Lesson 06 &middot; <a href="../MISSION.md">Distillation</a></p>
+
+  <h1>The knob you never turned <span class="sub">One flag changed how many names the shipped model invents &mdash; and the metric family called it a tie.</span></h1>
+
+  <p class="lede">
+    The last experiment in this project was queued for a housekeeping reason and was nearly
+    skipped. It came back moving the one number the mission actually cares about. This lesson
+    is about a parameter that sat in every deployment and in no experiment, and about the
+    reading discipline that keeps a one-in-three result from being oversold into a win.
+  </p>
+
+  <h2><span class="num">01</span>An hour that nearly was not worth spending</h2>
+
+  <p>
+    <a href="0005-ship-it-then-check.html">Lesson 05</a> ended with the precision question
+    measured: the shipped 4-bit artifact loses <strong>0.0162 ROUGE-1</strong> to the same
+    weights at 16 bits, and that loss belongs to the quantization, not to the engine and not
+    to the random draw. The step queued behind it was a different question, and a weaker
+    one. Every arm in the project decoded at <code>temperature 0.7</code>,
+    <code>top_p 0.9</code>, <code>repeat_penalty 1.05</code> &mdash; the shipped arm, both
+    controls, all of it. Nobody had asked what those three settings were doing.
+  </p>
+
+  <p>
+    The reason it was queued late is written into how the plan was worded. Its stated purpose
+    was <em>determinism</em>: &#8220;whether the deployment can be made deterministic instead
+    of seed-dependent.&#8221; The grounding question &mdash; do the invented names come from
+    the sampling or from the weights &mdash; was listed second, and had just got smaller:
+    a scorer bug had inflated the deployed arm's count to 324, and the fix brought it to 37,
+    fewer than the 16-bit arm's 46. A 37-name residual is not a reason to spend an hour.
+    So the run went out for the determinism, and it answered the grounding instead.
+  </p>
+
+  <div class="note">
+    <span class="note__label">The habit worth stealing</span>
+    <p>
+      Decoding reads as plumbing. It appears in every deployment, it is set once in a config
+      file, and it never becomes a variable &mdash; so it never gets measured. That is the
+      shape of a parameter that can move your headline metric without anyone noticing. When
+      you next write down &#8220;we serve at temperature 0.7,&#8221; ask whether that sentence
+      describes the model or merely the harness. Here it was the harness, and it was
+      controlling a quantity the mission was named after.
+    </p>
+  </div>
+
+  <h2><span class="num">02</span>Before you spend the hour, prove the switch is real</h2>
+
+  <p>
+    There was a specific way this run could have produced a confidently wrong answer, and
+    closing it is worth more than the result. Both GGUFs carry
+    <code>temperature 0.7 / top_p 0.9 / repeat_penalty 1.05</code> baked into their
+    <em>Modelfiles</em>. A request can pass its own <code>options</code>, and Ollama is
+    supposed to prefer those &mdash; but if it did not, the &#8220;greedy&#8221; run would
+    reproduce the sampled run token for token, and the project would have concluded that
+    <em>decoding changes nothing</em>. A correct number, from a switch that was never thrown.
+  </p>
+
+  <p>
+    So before committing the hour, three calls were served with <code>--limit 3 --greedy</code>
+    and diffed against their sampled counterparts. All three differ, and they differ in a
+    direction no trivial echo explains: greedy wrote <strong>152 / 183 / 128</strong> tokens
+    where sampling wrote <strong>91 / 157 / 97</strong>. Request options do override the
+    Modelfile, the switch is real, and the hour was worth spending.
+  </p>
+
+  <div class="note note--warn">
+    <div class="note__label">The general form</div>
+    <p>
+      A switch you have never seen change anything is not evidence that nothing changed. Smoke
+      the switch before you trust the run: pick the smallest number of calls that can differ,
+      run them both ways, and diff. This is the same move as
+      <a href="0003-reading-a-loss-curve.html">lesson 03</a>'s &#8220;verify the check can
+      fail&#8221; and as lesson 05's checks that reported success on a chain that ended in an
+      HTTP 500 &mdash; a measurement is only a measurement if it had something to fail for.
+    </p>
+  </div>
+
+  <h2><span class="num">03</span>What moved, and what the tie hides</h2>
+
+  <p>
+    The full run is 144 calls on <code>student-blend</code> &mdash; the Q4_K_M artifact that
+    ships, at 1.3 GB against the 16-bit tag's 3.8 GB &mdash; with <code>--keep-alive 0</code>
+    to match the sampled run's conditions. Same weights, same engine, same seed. Decoding is
+    the only variable, which makes this the cleanest comparison in the project.
+  </p>
+
+  <figure class="fig">
+    <svg viewBox="0 0 640 250" role="img" aria-label="Invented names fall from 37 to 24 and invented numbers from 105 to 76 when the shipped artifact decodes greedily instead of sampling, at the same output length.">
+      <rect class="b-samp" x="190" y="8" width="10" height="10"></rect>
+      <text class="b-key" x="206" y="17">sampled (shipped)</text>
+      <rect class="b-grd" x="330" y="8" width="10" height="10"></rect>
+      <text class="b-key" x="346" y="17">greedy</text>
+
+      <text class="b-lab" x="180" y="80">invented names</text>
+      <rect class="b-samp" x="190" y="52" width="141.0" height="20"></rect>
+      <text class="b-val" x="337.0" y="66">37</text>
+      <rect class="b-grd" x="190" y="76" width="91.4" height="20"></rect>
+      <text class="b-val" x="287.4" y="90">24</text>
+
+      <text class="b-lab" x="180" y="176">invented numbers</text>
+      <rect class="b-samp" x="190" y="148" width="400" height="20"></rect>
+      <text class="b-val" x="596" y="162">105</text>
+      <rect class="b-grd" x="190" y="172" width="289.5" height="20"></rect>
+      <text class="b-val" x="485.5" y="186">76</text>
+
+      <line class="b-axis" x1="190" y1="200" x2="590" y2="200"></line>
+      <text class="b-note" x="190" y="222">Same 144 calls. Mean output 108.7 words against 108.0 &mdash; the length did not move.</text>
+      <text class="b-note" x="190" y="240">Bars share one scale per row; names and numbers are different units.</text>
+    </svg>
+    <figcaption>
+      Counts, not rates. The length being held constant is what rules out the dull
+      explanation &mdash; that a shorter summary simply has fewer chances to invent something.
+    </figcaption>
+  </figure>
+
+  <p>
+    The grounding numbers are the finding. Ungrounded names fall from <strong>37 on 26 calls
+    to 24 on 16 calls</strong>, and ungrounded numbers from <strong>105 to 76</strong>, while
+    the summaries stay the same length (108.7 words against 108.0). Whatever the sampling was
+    doing, it was making the model commit to proper nouns and figures that appear nowhere in
+    the transcript.
+  </p>
+
+  <p>
+    On quality, the honest reading is narrower than the raw numbers invite. Three ROUGE
+    variants were computed, and <strong>one of them moved</strong>:
+  </p>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Metric</th><th>Greedy</th><th>Sampled</th><th>Paired &Delta;</th><th>95% CI</th><th>Verdict</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>ROUGE-1 <span class="prov">(measured)</span></td><td>0.4323</td><td>0.4285</td><td>+0.0038</td><td>[&minus;0.0101, +0.0170]</td><td>a tie</td></tr>
+        <tr><td>ROUGE-2 <span class="prov">(measured)</span></td><td>0.1431</td><td>0.1312</td><td><strong>+0.0119</strong></td><td>[+0.0035, +0.0193]</td><td><strong>real</strong></td></tr>
+        <tr><td>ROUGE-L <span class="prov">(measured)</span></td><td>0.2461</td><td>0.2369</td><td>+0.0093</td><td>[&minus;0.0003, +0.0174]</td><td>a tie</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    Two of three intervals cross zero, so <strong>&#8220;greedy is better on ROUGE&#8221; is
+    not a claim this run supports.</strong> What it supports is weaker and still useful:
+    <em>no variant got worse</em>. The improvement claim has to rest on ROUGE-2 together with
+    the grounding counts &mdash; and the grounding counts, unlike the ROUGE figures, carry
+    <strong>no paired test at all</strong>. They are differences of totals. Saying so is part
+    of the result, not a hedge on it.
+  </p>
+
+  <div class="exercise">
+    <div class="exercise__label">Predict before you look</div>
+    <p>
+      You have just read that greedy invents 13 fewer names across 144 calls. Before reading
+      the next section, write down what you think that means <em>for one call you pick at
+      random</em>. Will that call invent fewer names? How much fewer &mdash; and what would
+      it mean if the answer were &#8220;usually not&#8221;? Commit to a number before you
+      continue.
+    </p>
+  </div>
+
+  <h2><span class="num">04</span>A difference of totals is not a difference on your call</h2>
+
+  <p>
+    Call by call, sampling invents more names on <strong>19</strong> calls and greedy invents
+    more on <strong>8</strong>. The other <strong>117</strong> tie. So greedy's 24 names are
+    not a subset of sampling's 37 &mdash; they are a partly <em>different</em> set of 24. If
+    you picked a call at random and served it greedily, the most likely single outcome is
+    that nothing changed; the improvement lives in the distribution, not in the card.
+  </p>
+
+  <p>
+    That distinction is the one that gets lost when an aggregate becomes a promise.
+    &#8220;Greedy invents fewer names&#8221; is true of the run and false of any particular
+    call, and the gap between those two readings is where a deployment decision goes wrong.
+    The right question is not &#8220;will this call improve&#8221; but &#8220;do I prefer the
+    run with fewer invented names, given that it will be worse on some calls and better on
+    others.&#8221;
+  </p>
+
+  <div class="note">
+    <div class="note__label">What a tie is</div>
+    <p>
+      The same care applies to the two ROUGE intervals that cross zero. A tie is a statement
+      about <em>significance</em>: the run cannot tell you which direction the difference
+      points. It is never a statement that nothing happened. Read &#8220;0.0038, CI
+      [&minus;0.0101, +0.0170], tied&#8221; as <em>this experiment cannot resolve a difference
+      this small</em> &mdash; not as <em>there is no difference</em>. One of those two tells
+      you to run more calls; the other tells you to stop caring.
+    </p>
+  </div>
+
+  <h2><span class="num">05</span>What the flag costs</h2>
+
+  <p>
+    None of this is free, and the costs are the kind that surface later if they are not
+    written down now.
+  </p>
+
+  <ul>
+    <li>
+      <strong>It can run away.</strong> One of the 144 calls
+      (<code>call_id 92093631892</code>) hit the 900-token cap and ended mid-sentence &mdash;
+      the run's only truncation, where the sampled run had none. Greedy cannot escape a loop
+      it has entered; its characteristic failure is precisely the one sampling mostly avoids.
+      This is the field's own <a href="https://arxiv.org/abs/1904.09751">neural text
+      degeneration</a> result showing up as a single row in a score file.
+    </li>
+    <li>
+      <strong>Copy rate rises slightly</strong>, from 0.0117 to 0.0158 &mdash; the direction
+      sequence-level distillation is <a href="https://arxiv.org/html/2310.13760">documented</a>
+      to push, and the one a summarizer is most likely to lose quietly.
+    </li>
+    <li>
+      <strong>It is slower.</strong> A median <strong>18.5 s</strong> per call against
+      <strong>16.0 s</strong> &mdash; <strong>1.16&times;</strong> the wall time, split
+      <strong>1.07&times;</strong> prefill and <strong>1.09&times;</strong> decode, on the 143
+      calls neither run slept through. It writes a few more tokens (a median 143 against 132).
+      On a machine whose user is waiting, 16% is a real entry in the ledger.
+    </li>
+  </ul>
+
+  <p>
+    What the flag buys in exchange is determinism. Re-run it and you get the same summaries;
+    the seed-dependence that made <a href="0005-ship-it-then-check.html">lesson 05</a>'s arms
+    awkward to compare stops being a deployment concern. A run whose selling point is
+    determinism, that adds a truncation mode and 16% latency, is a trade rather than a fix
+    &mdash; which is the whole reason to measure it instead of adopting it.
+  </p>
+
+  <div class="note note--stop">
+    <div class="note__label">One row is not a result</div>
+    <p>
+      The run's total wall time was 181.6 minutes, against the ~75 minutes its own median
+      predicts. The cause is a single row showing 8,088 s &mdash; of which 8,080.5 s is
+      <em>prefill</em>, against a 5.2 s decode. The machine went into Modern Standby at
+      10:03:36 and woke at 12:18:01: <strong>8,065 s</strong>, matching that prefill to within
+      about fifteen seconds. Every latency figure above excludes that row. See
+      <a href="../learning-records/0003-the-machine-slept.md">learning record 0003</a> for why
+      an application timer cannot see a suspend, and why reading every outlier before naming
+      a cause is the habit that keeps a run readable.
+    </p>
+  </div>
+
+  <p>
+    The lesson generalises past this project: <strong>run the control for the weaker reason
+    too.</strong> The experiment was scheduled to make a deployment tidier and it ended up
+    answering the question the mission was named after &mdash; and it was one flag, not a
+    retraining run. The cheapest control on your list is the one you keep deferring because
+    it looks like configuration rather than science.
+  </p>
+
+  <div class="quiz">
+    <h3>Check yourself</h3>
+
+    <div class="q" data-fb="Its stated purpose was determinism — whether the deployment could be made seed-independent — and the grounding question was demoted to a residual after the scorer fix cut the deployed arm's invented names from 324 to 37. The run answered the residual instead: invented names fell by a third at the same output length. The lesson is not that the plan was wrong but that the cheap control answers whichever question it is actually sensitive to.">
+      <p class="q__text">The greedy run was queued to answer one question and answered another. Which did it answer?</p>
+      <div class="opts">
+        <button class="opt">Whether the deployment can be made deterministic instead of seed-dependent.</button>
+        <button class="opt">Whether the teacher's summaries were copied verbatim by the student.</button>
+        <button class="opt" data-correct="true">Whether invented names come from sampling or from the weights.</button>
+        <button class="opt">Whether the quantization or the inference engine caused the gap.</button>
+      </div>
+      <p class="q__fb"></p>
+    </div>
+
+    <div class="q" data-fb="The run holds weights, engine, seed and every sampling parameter fixed and changes decoding alone, so the difference is attributable to decoding rather than to any of the three confounds lesson 05 spent a run separating. Comparing only short summaries changes which calls are in the sample; retraining changes the weights; more resamples narrow an interval without making it about a different cause.">
+      <p class="q__text">What makes the greedy comparison attributable to decoding rather than to something else?</p>
+      <div class="opts">
+        <button class="opt">Comparing the two arms only on the shortest generated summaries.</button>
+        <button class="opt" data-correct="true">Serving the same weights, engine and seed with decoding switched.</button>
+        <button class="opt">Retraining the student with a much lower repetition penalty set.</button>
+        <button class="opt">Adding many more bootstrap resamples until the confidence interval narrows.</button>
+      </div>
+      <p class="q__fb"></p>
+    </div>
+
+    <div class="q" data-fb="Only ROUGE-2 moved: +0.0119 with an interval excluding zero. ROUGE-1 ties at +0.0038 [−0.0101, +0.0170] and ROUGE-L ties at +0.0093 [−0.0003, +0.0174], so two of the three variants cannot resolve a difference. The defensible sentence is therefore “greedy is not worse on ROUGE” — no variant moved down — with the improvement resting on ROUGE-2 plus the grounding counts, which carry no paired test.">
+      <p class="q__text">One of three ROUGE variants moved. Which claim does this run actually support?</p>
+      <div class="opts">
+        <button class="opt">Greedy improves ROUGE overall, since no variant ever got worse.</button>
+        <button class="opt">Greedy improves every variant, though only one reached real significance.</button>
+        <button class="opt" data-correct="true">Greedy is not worse on ROUGE, and ROUGE-2 clearly improved.</button>
+        <button class="opt">Greedy's ROUGE gain is real since its interval excludes zero.</button>
+      </div>
+      <p class="q__fb"></p>
+    </div>
+
+    <div class="quiz__score"></div>
+  </div>
+
+  <ul class="roadmap">
+    <li><span class="n">01</span><span class="t">Text, not logits</span><span class="d">Sequence-level distillation, and why the two tokenizers force it.</span></li>
+    <li><span class="n">02</span><span class="t">Audit the teacher</span><span class="d">The cap is a failure detector, not a length limit &mdash; and one failure is invisible to reading.</span></li>
+    <li><span class="n">03</span><span class="t">Reading a loss curve</span><span class="d">LoRA on the audited blend, against a control, and reading a loss curve honestly.</span></li>
+    <li><span class="n">04</span><span class="t">Evaluate honestly</span><span class="d">Paired bootstrap, teacher agreement, and reporting where the student is worse.</span></li>
+    <li><span class="n">05</span><span class="t">Ship it, then check</span><span class="d">Quantization, four numbers that were reported fields rather than measurements, and how to tell precision from engine and draw.</span></li>
+    <li class="is-current"><span class="n">06</span><span class="t">The knob you never turned</span><span class="d">A decoding flag that cut invented names by a third, the tie it hid behind, and why a difference of totals is not a difference on your call.</span></li>
+  </ul>
+
+  <aside class="ask">
+    <div class="ask__label">Ask me</div>
+    <p>
+      The obvious next knob is the one this run implicated: the 900-token cap and the
+      repetition penalty are what turned one call into a runaway. Ask me to sweep them and
+      find out whether the truncation is avoidable without giving back the grounding gain
+      &mdash; that is a real experiment with a predictable failure mode, which makes it a good
+      one to run together.
+    </p>
+  </aside>
+
+  <aside class="ask">
+    <div class="ask__label">Primary source</div>
+    <p>
+      <a href="https://arxiv.org/abs/1904.09751">Holtzman, Buys, Du, Forbes &amp; Choi,
+      &#8220;The Curious Case of Neural Text Degeneration&#8221; (ICLR 2020)</a>. It is why
+      sampling is the default at all: greedy and beam decoding produce repetitive, degenerate
+      text, and the fix is truncating the distribution tail rather than adding randomness.
+      Read it against this run &mdash; the paper's prior is &#8220;greedy is worse,&#8221; and
+      here the ROUGE difference was a tie while the grounding difference was real, which is
+      what it looks like when a prior meets a measurement.
+    </p>
+  </aside>
+
+  <footer class="lesson-foot">
+    Lesson 06 &middot; Distillation &middot; the decoding half of the deployment &middot; sources
+    <code>finetune/scores_greedy.json</code>, <code>finetune/scores_q4km.json</code>,
+    <code>finetune/local_samples_greedy.jsonl</code>, <code>finetune/local_samples.jsonl</code>,
+    <code>DESIGN.md</code> step 10, <code>learning-records/0003-the-machine-slept.md</code>
+  </footer>
+
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

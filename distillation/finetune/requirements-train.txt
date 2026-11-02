@@ -1,0 +1,8 @@
+# Pinned for Qwen3-8B LoRA SFT. transformers>=4.51 is required for the Qwen3
+# architecture; trl>=0.16 understands SFTConfig + assistant_only_loss.
+torch>=2.4.0
+transformers>=4.51.0
+trl>=0.16.0
+peft>=0.14.0
+accelerate>=1.0.0
+datasets>=3.0.0

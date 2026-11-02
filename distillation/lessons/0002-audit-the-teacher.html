@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 02 — Audit the teacher</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  /* Figure-local classes. Colours come from lesson.css tokens, so both themes work. */
+  .fig-t      { font-family: var(--mono); font-size: 11px; fill: var(--muted); }
+  .fig-t--ink { font-family: var(--mono); font-size: 11px; fill: var(--ink); }
+  .fig-t--stop{ font-family: var(--mono); font-size: 11px; fill: var(--stop); }
+  .fig-n      { font-family: var(--mono); font-size: 12px; font-weight: 500; fill: var(--ink); }
+  .fig-axis   { stroke: var(--rule-2); stroke-width: 1; }
+  .fig-bracket{ stroke: var(--rule-2); stroke-width: 1; stroke-dasharray: 3 4; }
+  .fig-bar    { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1; }
+  .fig-dot    { fill: var(--stop); }
+  .fig-dotring{ fill: none; stroke: var(--stop); stroke-width: 1.5; }
+
+  /* A two-row evidence table; it is the page's one piece of tabular data. */
+  .ev { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin: 1.25rem 0; }
+  .ev th, .ev td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--rule-2); }
+  .ev th { font-family: var(--display); font-size: 0.72rem; letter-spacing: 0.06em;
+           text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .ev td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ev td.stop { color: var(--stop); font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .ev tr:last-child td { border-bottom: none; }
+  .ev-wrap { overflow-x: auto; }
+</style>
+</head>
+<body class="lesson">
+
+<p class="eyebrow">Lesson 02 · <a href="0001-text-not-logits.html">after Lesson 01</a></p>
+
+<h1>Audit the teacher
+  <span class="sub">A distillation target is training data, not ground truth. Two of the 154 labels in
+  your teacher pass would have taught the student to repeat itself — and you could only <em>read</em> one of them.</span>
+</h1>
+
+<p class="lede">
+  In <a href="0001-text-not-logits.html">Lesson 01</a> you chose sequence-level distillation: the student
+  is trained on the teacher's <em>text</em>, because the two models have different tokenizers and logits
+  cannot be compared. That choice has a consequence worth stating plainly. When the teacher was wrong,
+  the student does not see an error signal — it sees a target. So before the pass becomes a dataset,
+  it gets audited.
+</p>
+
+<div class="kv">
+  <div class="kv__row"><div class="kv__k">Teacher</div><div class="kv__v">qwen8b_lora — the fine-tune already in this repo (R1 0.478)</div></div>
+  <div class="kv__row"><div class="kv__k">Rows</div><div class="kv__v">154 → split train 142 / val 12</div></div>
+  <div class="kv__row"><div class="kv__k">Decoding</div><div class="kv__v">beam search, width 4, hard cap 900 tokens</div></div>
+  <div class="kv__row"><div class="kv__k">Cost</div><div class="kv__v">725 s total · 4.7 s per call · median 146 tokens</div></div>
+</div>
+
+<h2><span class="num">01</span> The shape of the pass</h2>
+
+<p>
+  Plot every summary's length and something looks wrong before you even read the text. The distribution
+  is not a heap with a thin tail — it is three bins, a void, and two outliers pinned to the ceiling.
+</p>
+
+<figure>
+  <svg viewBox="0 0 640 290" role="img"
+       aria-label="Histogram of teacher summary lengths. 26 rows fall in 0 to 99 tokens, 102 rows in 100 to 199, and 24 rows in 200 to 299. No row falls anywhere between 300 and 899 tokens. Exactly 2 rows sit at the 900-token cap.">
+    <!-- the void: bracketed by where the healthy data stops and the cap -->
+    <line class="fig-bracket" x1="243.3" y1="48" x2="243.3" y2="215"/>
+    <line class="fig-bracket" x1="590" y1="48" x2="590" y2="196"/>
+
+    <!-- bars -->
+    <rect class="fig-bar" x="74"  y="176.8" width="50" height="38.2"/>
+    <rect class="fig-bar" x="132" y="65"   width="50" height="150"/>
+    <rect class="fig-bar" x="190" y="179.7" width="50" height="35.3"/>
+
+    <!-- counts -->
+    <text class="fig-n" x="99"  y="168" text-anchor="middle">26</text>
+    <text class="fig-n" x="157" y="56"  text-anchor="middle">102</text>
+    <text class="fig-n" x="215" y="171" text-anchor="middle">24</text>
+
+    <!-- the void, labelled -->
+    <text class="fig-t" x="400" y="132" text-anchor="middle">no row lands here</text>
+    <text class="fig-t" x="400" y="149" text-anchor="middle">a 600-token void</text>
+
+    <!-- the two rows at the cap, as points: a point is one row, so nothing is drawn to a false scale -->
+    <circle class="fig-dot" cx="590" cy="201" r="4.5"/>
+    <circle class="fig-dot" cx="590" cy="211" r="4.5"/>
+    <text class="fig-t--stop" x="574" y="205" text-anchor="end">2 rows at the cap</text>
+
+    <!-- axis -->
+    <line class="fig-axis" x1="70" y1="215" x2="590" y2="215"/>
+    <line class="fig-axis" x1="70"   y1="215" x2="70"   y2="220"/>
+    <line class="fig-axis" x1="127.8" y1="215" x2="127.8" y2="220"/>
+    <line class="fig-axis" x1="185.6" y1="215" x2="185.6" y2="220"/>
+    <line class="fig-axis" x1="243.3" y1="215" x2="243.3" y2="220"/>
+    <line class="fig-axis" x1="416.7" y1="215" x2="416.7" y2="220"/>
+    <line class="fig-axis" x1="590"   y1="215" x2="590"   y2="220"/>
+
+    <text class="fig-t" x="70"    y="234" text-anchor="middle">0</text>
+    <text class="fig-t" x="127.8" y="234" text-anchor="middle">100</text>
+    <text class="fig-t" x="185.6" y="234" text-anchor="middle">200</text>
+    <text class="fig-t" x="243.3" y="234" text-anchor="middle">300</text>
+    <text class="fig-t" x="416.7" y="234" text-anchor="middle">600</text>
+    <text class="fig-t" x="590"   y="234" text-anchor="middle">900</text>
+    <text class="fig-t--stop" x="590" y="248" text-anchor="middle">cap</text>
+  </svg>
+  <figcaption>
+    <strong>Length of each of the 154 teacher summaries.</strong> Among the 152 healthy rows the percentiles
+    are p10 88 · median 146 · p90 217, and the longest is 275. Nothing at all occurs in the empty band. The
+    ceiling is not a length limit the summaries approached; it is a wall two of them hit.
+  </figcaption>
+</figure>
+
+<div class="note note--warn">
+  <div class="note__label">Note</div>
+  <p>
+    The teacher output records no <code>done_reason</code>. There is no field saying
+    <em>stopped</em> versus <em>cut off</em> — so the audit has to infer it, and the only
+    available evidence is that the count sits exactly on the cap.
+  </p>
+</div>
+
+<h2><span class="num">02</span> Two ways a generation fails, only one of which you can read</h2>
+
+<p>
+  Both capped rows are in the <strong>train</strong> split. Both would have become blend targets. They are
+  not the same failure, and the difference is the whole lesson — so here is the actual evidence, taken
+  from the two records.
+</p>
+
+<div class="ev-wrap">
+<table class="ev">
+  <thead>
+    <tr>
+      <th>call_id</th><th>split</th><th>tokens</th><th>visible chars</th><th>seconds</th><th>what the text does</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="num">112780610566</td><td>train</td>
+      <td class="stop">900</td><td class="num">3,951</td><td class="num">23.75</td>
+      <td>collapses into <code>Lynn (agreement contact),</code> ×106</td>
+    </tr>
+    <tr>
+      <td class="num">116979700381</td><td>train</td>
+      <td class="stop">900</td><td class="num">364</td><td class="num">23.75</td>
+      <td>looks completely normal — see below</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  The first row is the failure you would expect: a real summary that slides into a runaway list of one
+  person's name and role, and never stops. Read it and you see the problem immediately.
+</p>
+
+<p>
+  The second row is the one worth the lesson. It burned the same 900 tokens. It produced
+  <strong>364 characters</strong> — about 70 words, a perfectly ordinary two-sentence summary, the
+  kind you would wave through. So where did 900 tokens go?
+</p>
+
+<p>
+  Two independent figures say the token count is real and not a recording bug. First, <code>23.75 s</code>
+  is the <em>unique maximum</em> of the <code>seconds</code> column across all 154 rows, and exactly these
+  two rows hold it. Second, 900 ÷ 23.75 = <strong>37.9 tokens/s</strong> for both — and 37.9 sits just
+  above the healthy rows' p90 of 37.1 tokens/s, which is exactly where you expect the fastest per-token
+  rate to land once per-call overhead is amortised over maximum work. A mis-recorded count cannot make a
+  wall clock run long.
+</p>
+
+<div class="note note--stop">
+  <div class="note__label">The finding</div>
+  <p>
+    Row <code>116979700381</code> emitted 900 tokens and only 364 characters of text. The tokens that
+    consumed the rest produced <em>nothing visible</em> — it looped in a space the stored summary never
+    recorded. When it was regenerated, its visible summary came back
+    <strong>byte-identical</strong>: 364 characters before, 364 characters after. Nothing about the text
+    was ever wrong; it was silently burning the cap.
+  </p>
+</div>
+
+<p>
+  That kills the obvious audit. A text scan for repeated phrases catches row one (106 repeats of a 6-gram)
+  and finds <em>nothing</em> in row two, whose top 6-gram occurs exactly once. You cannot audit
+  pseudo-labels by reading them. The cap is not a redundant second signal — for this entire class of
+  failure it is the only signal there is.
+</p>
+
+<h2><span class="num">03</span> Why a bad label bites harder here</h2>
+
+<p>
+  At inference, a model that loops is an annoyance: you re-run it, or a caller notices. In distillation the
+  relationship inverts. Under sequence-level KD the student's loss is pushed toward reproducing the
+  teacher's token sequence, so a degenerate label is not a slightly-worse target — it is an explicit
+  target that says <em>continue repeating</em>. This is the same asymmetry as any supervised setting:
+  noise in a label is not averaged away, it is learned.
+</p>
+
+<p>
+  There is a second reason specific to decoding. <a href="https://arxiv.org/abs/1904.09751" target="_blank" rel="noopener">Holtzman
+  et&nbsp;al. (2019)</a> show that likelihood — excellent as a training objective — behaves badly as a
+  <em>decoding</em> objective, producing text that is "bland and strangely repetitive", and that the
+  decoding strategy alone changes output quality from the very same weights. Beam search takes the
+  highest-likelihood continuation at every step. Once a loop has begun, continuing the loop <em>is</em>
+  the high-likelihood path, because the model's own context has made that phrase the most probable next
+  token. Beam width 4 does not protect against this; measured here, it did not prevent it. Our pass was
+  already beam4, and still 2 of 154 rows degenerated.
+</p>
+
+<div class="note">
+  <div class="note__label">What we did</div>
+  <p>
+    Both rows were regenerated with the <em>same</em> model, <em>same</em> prompt, <em>same</em> beam4, and
+    one changed decoding condition: <code>--repetition-penalty 1.1</code>. They came back at
+    <strong>209</strong> and <strong>78</strong> tokens. The pre-repair file was kept as
+    <code>teacher_output.before_redo.jsonl</code>, and each spliced record gained a provenance field:
+    <code>"replaced": "repetition loop at cap; 900 -&gt; 78 tok, penalty 1.1"</code>.
+  </p>
+</div>
+
+<p>
+  The repaired pass now audits clean — <strong>0 flagged of 154</strong>, maximum length 275. But the fix
+  is not free, and you should be able to say the cost out loud: two of the 154 labels now come from a
+  different decoding distribution than the other 152. That is a real, if small, unevenness in the training
+  set, and it is recorded rather than hidden. The trade is deliberate — a degenerate label teaches
+  repetition, while a slightly off-distribution one merely teaches a slightly different summary. Stated
+  as a rule: <em>prefer a slightly uneven target over a confidently wrong one, and always leave a record
+  that you made the choice.</em>
+</p>
+
+<h2><span class="num">04</span> Your turn — run the audit</h2>
+
+<p>
+  The audit is a script in your repo, not a snippet, because you will run it again on the next project.
+  It checks both symptoms, since they catch different failures:
+  <code>finetune/audit_teacher.py</code>.
+</p>
+
+<div class="code-head">
+  <span class="code-head__label">PowerShell · from finetune/</span>
+  <button class="copy" type="button">copy</button>
+</div>
+<pre><code># the pass as it came back, before any repair
+.\.venv\Scripts\python.exe -I audit_teacher.py teacher_output.before_redo.jsonl
+
+# the same script on the file you are about to train on
+.\.venv\Scripts\python.exe -I audit_teacher.py teacher_output.jsonl</code></pre>
+
+<p class="expected">
+  <strong>Expected</strong> — the first command flags two rows and the second flags none:
+</p>
+
+<pre><code>teacher_output.before_redo.jsonl: 154 rows, median 146 tokens, max 900 tokens
+
+112780610566  split=train tokens=900  AT CAP  106x  'Lynn (agreement contact), Lynn (agreement co'
+116979700381  split=train tokens=900  AT CAP  1x  'The rep confirmed with Pat McConn'
+
+flagged 2 of 154 rows
+
+teacher_output.jsonl: 154 rows, median 146 tokens, max 275 tokens
+
+flagged 0 of 154 rows</code></pre>
+
+<div class="exercise">
+  <div class="exercise__label">Exercise</div>
+  <p>
+    Read the two flagged lines and notice what the second column of numbers does. Row one's worst 6-gram
+    repeats <strong>106</strong> times. Row two's repeats <strong>once</strong> — that column is
+    <em>silent</em> about it. So before you look at the answer: which single number in that output is
+    carrying the detection for row two?
+  </p>
+  <p>
+    Then answer the harder question. The script takes <code>--repetition-penalty</code> out of the
+    picture entirely and never reads the text of row two as suspicious — by every textual measure it is a
+    good summary. If a label can be simultaneously good and a loop, what does that tell you about auditing
+    pseudo-labels by inspecting them?
+  </p>
+</div>
+
+<div class="quiz">
+  <div class="q" data-fb="Generation ran until it was cut off: the model never chose to stop. The file records no done_reason, so an exact hit on the cap is the evidence.">
+    <p class="q__text">What does a row sitting at exactly the token cap tell you?</p>
+    <div class="opts">
+      <button class="opt" data-correct>The model looped and never chose to stop.</button>
+      <button class="opt">The summary is genuinely nine hundred tokens long.</button>
+      <button class="opt">Beam search has protected it from all repetition.</button>
+      <button class="opt">The tokenizer miscounted and the row is fine.</button>
+    </div>
+    <p class="q__fb"></p>
+  </div>
+
+  <div class="q" data-fb="Under sequence-level distillation the student's loss is pushed toward the teacher's tokens, so a degenerate label is an explicit instruction to reproduce that failure — not noise that averages away.">
+    <p class="q__text">Why does a degenerate label matter more in distillation than in inference?</p>
+    <div class="opts">
+      <button class="opt" data-correct>The student is trained on the same failure.</button>
+      <button class="opt">It costs more money when the teacher runs.</button>
+      <button class="opt">It makes the teacher's average score look bad.</button>
+      <button class="opt">It slows training because the row is long.</button>
+    </div>
+    <p class="q__fb"></p>
+  </div>
+
+  <div class="q" data-fb="900 tokens at 23.75 s matches the wall clock of the other capped row exactly, so the tokens were really generated; only 364 characters survived into the text. The visible summary was never the whole generation.">
+    <p class="q__text">A row is 900 tokens but only 364 characters of visible text. What does that mean?</p>
+    <div class="opts">
+      <button class="opt" data-correct>It emitted many tokens that produced no text.</button>
+      <button class="opt">The tokenizer counted every character as one token.</button>
+      <button class="opt">The summary is simply unusually dense and short.</button>
+      <button class="opt">The count is wrong and should be discarded.</button>
+    </div>
+    <p class="q__fb"></p>
+  </div>
+
+  <div class="q" data-fb="Two labels now come from slightly different decoding than the other 152. Recording it keeps the unevenness visible instead of quietly baking it into the training set.">
+    <p class="q__text">Why keep a record of which labels were regenerated?</p>
+    <div class="opts">
+      <button class="opt" data-correct>Because two labels now come from different decoding.</button>
+      <button class="opt">Because the scorer has to exclude those rows.</button>
+      <button class="opt">Because storage is cheap and the file is small.</button>
+      <button class="opt">Because it makes the dataset look more complete.</button>
+    </div>
+    <p class="q__fb"></p>
+  </div>
+
+  <div class="quiz__score"></div>
+</div>
+
+<h2><span class="num">05</span> Primary source</h2>
+
+<ul class="sources">
+  <li>
+    <a href="https://arxiv.org/abs/1904.09751" target="_blank" rel="noopener">Holtzman, Buys, Du, Forbes &amp; Choi — <em>The Curious Case of Neural Text Degeneration</em></a> (ICLR 2020).
+    <span class="why">The paper behind §03: likelihood is a fine training objective and a poor decoding one;
+    the same weights produce bland, repetitive text under different decoding strategies. Read it for the
+    distributional argument you will need when you choose a decoding strategy for the student.</span>
+  </li>
+  <li>
+    <a href="0001-text-not-logits.html">Lesson 01 — Text, not logits</a>.
+    <span class="why">Why there is a teacher pass to audit at all: different tokenizers make logit
+    distillation undefined, so the student learns from text.</span>
+  </li>
+</ul>
+
+<h2><span class="num">06</span> Where this sits</h2>
+
+<ul class="roadmap">
+    <li><span class="n">01</span><span class="t">Text, not logits</span><span class="d">Sequence-level distillation, and why the two tokenizers force it.</span></li>
+    <li class="is-current"><span class="n">02</span><span class="t">Audit the teacher</span><span class="d">The cap is a failure detector, not a length limit &mdash; and one failure is invisible to reading.</span></li>
+    <li><span class="n">03</span><span class="t">Reading a loss curve</span><span class="d">LoRA on the audited blend, against a control, and reading a loss curve honestly.</span></li>
+    <li><span class="n">04</span><span class="t">Evaluate honestly</span><span class="d">Paired bootstrap, teacher agreement, and reporting where the student is worse.</span></li>
+    <li><span class="n">05</span><span class="t">Ship it, then check</span><span class="d">Quantization, four numbers that were reported fields rather than measurements, and how to tell precision from engine and draw.</span></li>
+    <li><span class="n">06</span><span class="t">The knob you never turned</span><span class="d">A decoding flag that cut invented names by a third, the tie it hid behind, and why a difference of totals is not a difference on your call.</span></li>
+</ul>
+
+<div class="note">
+  <div class="note__label">Changed from the plan</div>
+  <p>
+    Lesson 01's roadmap promised this lesson would be "beam search vs sampling". Measurement replaced it:
+    the pass already used beam4, and the real finding was two degenerate labels — one of which no amount
+    of reading would have found. The lesson follows the evidence, not the syllabus.
+  </p>
+</div>
+
+<aside class="ask">
+  <div class="ask__label">Ask me</div>
+  <p>
+    I am your teacher for this, so bring me anything unclear. Good questions from here: <em>why did the
+    silent loop decode to no text at all?</em> (worth digging into the tokenizer's added tokens and
+    control tokens), <em>what other failure shapes have a cheap detector?</em>, and <em>should the two
+    repaired rows be down-weighted rather than just recorded?</em> If you want a broader opinion than
+    mine, the practitioners who compare notes on KD recipes are on the Hugging Face forums and in
+    r/LocalLLaMA.
+  </p>
+</aside>
+
+<footer class="lesson-foot">
+  <p>
+    Lesson 02 of the distillation build. Grounded in <code>finetune/teacher_output.before_redo.jsonl</code>
+    (154 rows), <code>finetune/teacher_output.jsonl</code> (post-repair), and
+    <code>finetune/audit_teacher.py</code>. Every number on this page is read from those files or computed
+    by that script.
+  </p>
+  <p><a href="0001-text-not-logits.html">← Lesson 01</a></p>
+</footer>
+
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

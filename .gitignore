@@ -28,3 +28,13 @@ finetune/results*.jsonl
 finetune/qwen3-*-lora/
 *.safetensors
 output*/
+
+# Distillation: artifacts never leave the machine
+distillation/**/*.jsonl
+distillation/**/*.gguf
+distillation/**/*.safetensors
+distillation/**/base_model/
+distillation/**/merged/
+distillation/**/adapters/
+distillation/**/.venv/
+distillation/corpus/

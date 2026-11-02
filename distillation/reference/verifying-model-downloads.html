@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Verifying Model Downloads</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<main class="lesson">
+
+  <p class="eyebrow">Reference &middot; <a href="../MISSION.md">Distilling the summarizer</a></p>
+
+  <h1>Verifying model downloads
+    <span class="sub">One API response carries two different hashes of the same file.
+    Checking the wrong one makes a perfect download look corrupt.</span>
+  </h1>
+
+  <p class="lede">
+    Before you trust a downloaded checkpoint — or spend twenty minutes re-downloading
+    one — you have to know which hash the publisher actually means. This page is the
+    checklist, and the trap that cost this project a full wasted re-download.
+  </p>
+
+  <div class="note">
+    <span class="note__label">The one-line distinction</span>
+    <p>
+      <strong><code>lfs.oid</code> is the sha256 of the file's bytes.
+      <code>xetHash</code> is Hugging Face's Xet content hash.</strong> Both appear in
+      the same API entry, for the same file. Compare against <code>lfs.oid</code>. The
+      CDN's <code>ETag</code> is derived from the Xet path, so it will agree with the
+      wrong one.
+    </p>
+  </div>
+
+  <h2><span class="num">01</span>What the trap looks like</h2>
+
+  <p>
+    <code>GET https://huggingface.co/api/models/&lt;repo&gt;/tree/&lt;rev&gt;</code>
+    returns, per file, an entry like this:
+  </p>
+
+  <div class="code-head"><span class="code-head__label">json</span><button class="copy" type="button">copy</button></div>
+<pre>{
+  "path": "model.safetensors-00001-of-00001.safetensors",
+  "size": 4548221488,
+  "lfs":  { "oid": "aa33250c...", "size": 4548221488, "pointerSize": 135 },
+  "xetHash": "4a33a6bd..."
+}</pre>
+
+  <p>Two hashes, one file, two different hash spaces:</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>field</th><th>value here</th><th>what it is</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>lfs.oid</code></td>
+          <td><code>aa33250c…</code></td>
+          <td><strong>sha256 of the bytes</strong> — this is the one you compare against</td>
+        </tr>
+        <tr>
+          <td><code>xetHash</code></td>
+          <td><code>4a33a6bd…</code></td>
+          <td>Xet's chunk-level content hash, computed over a different representation</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    In this project <code>EXPECT_SHA</code> had been copied from <code>xetHash</code>.
+    A fresh, rail-enforced re-download then matched the local file <em>byte for byte</em>
+    on all 543 blocks — <strong>0 differing</strong> — and the file's own sha256 came
+    out as <code>aa33250c…</code>, the <code>lfs.oid</code>. Nothing was ever corrupt.
+    The constant was.
+  </p>
+
+  <div class="note note--warn">
+    <span class="note__label">Why the ETag did not give it away</span>
+    <p>
+      The <code>ETag</code> on the <code>resolve</code> URL comes off the Xet path, so
+      it agreed with <code>xetHash</code> and appeared to <em>confirm</em> that the
+      local bytes were the wrong ones. An independent-looking signal that shares a
+      source with your assumption is not a second opinion.
+    </p>
+  </div>
+
+  <h2><span class="num">02</span>Four checks, and what each can actually tell you</h2>
+
+  <p>
+    The trap is not the wrong constant by itself. It is that three other checks all
+    pointed the same way, and not one of them could distinguish <em>corrupt</em> from
+    <em>correct</em>.
+  </p>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>check</th><th>tells you</th><th>cannot tell you</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>length equals the published <code>size</code></td>
+          <td>nothing was truncated</td>
+          <td>silent in-place corruption</td>
+        </tr>
+        <tr>
+          <td><code>ETag</code> / CDN path hash</td>
+          <td>what the CDN believes it is serving</td>
+          <td><em>which</em> hash is the content hash — here it agreed with the wrong one</td>
+        </tr>
+        <tr>
+          <td>zero scan for hole regions</td>
+          <td>no unwritten sparse regions left by a resumed partial</td>
+          <td>a mis-offset append, which is non-zero garbage</td>
+        </tr>
+        <tr>
+          <td><em>N</em> evenly spaced probes vs the CDN</td>
+          <td>the sampled bytes agree</td>
+          <td>damage between the probes</td>
+        </tr>
+        <tr>
+          <td><strong>sha256 vs <code>lfs.oid</code></strong></td>
+          <td><strong>the bytes are the published bytes</strong></td>
+          <td>— nothing. This is the decisive one.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    The first four are cheap, and worth running. None of them is a verdict. Only the
+    last line is. When a check cannot distinguish your hypothesis from its opposite,
+    it is not evidence — it is a restatement of your assumption in a different unit.
+  </p>
+
+  <h2><span class="num">03</span>The rails: fetching a large file safely</h2>
+
+  <p>
+    The original downloader set a <code>Range</code> header and trusted the answer. It
+    never checked that the status was <code>206</code>, never checked that
+    <code>Content-Range</code> began where it asked, and never checked the body arrived
+    complete. A CDN answering a ranged request with a <code>200</code> — or from a
+    different offset — would have had its body appended in the wrong place: silent
+    corruption that still leaves the file the right length.
+  </p>
+
+  <div class="exercise">
+    <span class="exercise__label">Rules for any resumed or ranged fetch</span>
+    <ol>
+      <li>require <code>status == 206</code></li>
+      <li>require <code>Content-Range</code> to start with <code>bytes &lt;offset&gt;-</code></li>
+      <li>require the body length to equal the bytes you asked for</li>
+      <li>retry the <em>block</em>, never the whole file</li>
+      <li>compare each block against the old file <em>as you write</em>, so one pass yields
+          both a verified file and a damage map</li>
+    </ol>
+  </div>
+
+  <div class="code-head"><span class="code-head__label">python</span><button class="copy" type="button">copy</button></div>
+<pre>if r.status != 206:
+    raise RuntimeError(f"status {r.status}, expected 206")
+cr = r.headers.get("Content-Range") or ""
+if not cr.startswith(f"bytes {start}-"):
+    raise RuntimeError(f"Content-Range {cr!r} does not start at {start}")
+if len(buf) != want:
+    raise RuntimeError(f"short body {len(buf)} != {want}")</pre>
+
+  <p>
+    Working implementation: <code>finetune/refetch_verified.py</code>. It caught a real
+    <code>ConnectionResetError</code> at 948 MB and retried that block — the older
+    downloader would have appended whatever arrived.
+  </p>
+
+  <h2><span class="num">04</span>Validating the shard itself</h2>
+
+  <p>
+    A hash tells you the bytes match the published bytes. It does not tell you the file
+    is loadable — and after a merge, a conversion, or a hand-assembled directory, you
+    want both. Five checks on a <code>.safetensors</code> file, without loading any
+    weights:
+  </p>
+
+  <ol>
+    <li>the highest tensor end offset equals the file size, <em>exactly</em></li>
+    <li>the sum of tensor byte-lengths equals the index's <code>metadata.total_size</code></li>
+    <li>every name in <code>weight_map</code> is present in the header</li>
+    <li>no tensor's <code>data_offsets</code> fall outside the file</li>
+    <li>read one tensor at each end with <code>torch</code></li>
+  </ol>
+
+  <div class="code-head"><span class="code-head__label">python</span><button class="copy" type="button">copy</button></div>
+<pre>import json, os, struct
+from safetensors import safe_open
+
+size = os.path.getsize(path)
+with open(path, "rb") as f:
+    (n,) = struct.unpack("&lt;Q", f.read(8))
+    header = json.loads(f.read(n))
+header.pop("__metadata__", None)
+
+ends = [8 + n + v["data_offsets"][1] for v in header.values()]
+assert max(ends) == size, "a tensor runs past the end of the file"
+
+# "pt", not "numpy": numpy cannot represent bfloat16 and raises
+# TypeError: data type 'bfloat16' not understood
+with safe_open(path, framework="pt") as f:
+    f.get_tensor(next(iter(f.keys())))</pre>
+
+  <div class="note">
+    <span class="note__label">What these printed on the 2B shard</span>
+    <p>
+      632 tensors &middot; header 76,648 bytes &middot; data region 4,548,144,832 bytes
+      &middot; file 4,548,221,488 bytes. Data plus header equals the file size to the
+      byte, and the tensor count matches the index's 632 exactly.
+    </p>
+  </div>
+
+  <h2><span class="num">05</span>Where this sits in the project</h2>
+
+  <ul class="roadmap">
+    <li>
+      <span class="n">01</span>
+      <span class="t"><a href="../lessons/0001-text-not-logits.html">Text, not logits</a></span>
+      <span class="d">Why the teacher's text and not its probabilities — the tokenizer gap.</span>
+    </li>
+    <li>
+      <span class="n">02</span>
+      <span class="t"><a href="../lessons/0002-audit-the-teacher.html">Audit the teacher</a></span>
+      <span class="d">Pseudo-labels cannot be trusted by reading them; the cap is the audit.</span>
+    </li>
+    <li class="is-current">
+      <span class="n">R</span>
+      <span class="t">Verifying model downloads</span>
+      <span class="d">This page. The two-hash trap, the rails, and the shard checks.</span>
+    </li>
+  </ul>
+
+  <ul class="sources">
+    <li>
+      <a href="https://huggingface.co/docs/hub/storage-backends">Hugging Face — Xet, our storage backend</a>
+      <span class="why">The two-backend design (Xet alongside legacy Git LFS) is the reason
+      two hash spaces coexist for one file. Read the "Backwards Compatibility &amp; Legacy"
+      section for the LFS half.</span>
+    </li>
+    <li>
+      <a href="https://huggingface.co/docs/hub/api">Hugging Face — Hub API endpoints</a>
+      <span class="why">Where the tree endpoint and its fields are documented; it now
+      points at the OpenAPI playground for the current schema.</span>
+    </li>
+    <li>
+      <a href="https://github.com/huggingface/safetensors">safetensors</a>
+      <span class="why">The header and <code>data_offsets</code> layout that section 04
+      reads directly.</span>
+    </li>
+  </ul>
+
+  <div class="ask">
+    <span class="ask__label">Ask your teacher</span>
+    <p>
+      Anything here unclear — especially before you write your own downloader, which is
+      the point at which this page stops being trivia and starts being load-bearing.
+      Related: the <a href="distillation-glossary.html">distillation glossary</a>.
+    </p>
+  </div>
+
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

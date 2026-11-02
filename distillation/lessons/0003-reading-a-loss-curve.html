@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lesson 03 — The Loss Curve That Lied</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+  /* Figure-local classes. Colours come from lesson.css tokens, so both themes work. */
+  .c-grid   { stroke: var(--rule);   stroke-width: 1; }
+  .c-axis   { stroke: var(--rule-2); stroke-width: 1.2; }
+  .c-blend  { stroke: var(--accent); stroke-width: 2; fill: none; }
+  /* The control is dashed as well as red, so the two arms stay apart in a grey print. */
+  .c-ctrl   { stroke: var(--stop);   stroke-width: 2; fill: none; stroke-dasharray: 5 3; }
+  .c-db     { fill: var(--accent); stroke: var(--surface); stroke-width: 1.2; }
+  .c-dc     { fill: var(--stop);   stroke: var(--surface); stroke-width: 1.2; }
+  .c-t      { font-family: var(--mono);    font-size: 11px;   fill: var(--muted); }
+  .c-lb     { font-family: var(--mono);    font-size: 11px;   font-weight: 600; fill: var(--accent); }
+  .c-lc     { font-family: var(--mono);    font-size: 11px;   font-weight: 600; fill: var(--stop); }
+  .c-h      { font-family: var(--display); font-size: 12.5px; font-weight: 600; fill: var(--ink); }
+  .c-sub    { font-family: var(--body);    font-size: 11px;   fill: var(--muted); }
+  .c-hi     { font-family: var(--mono);    font-size: 11px;   font-weight: 600; fill: var(--stop); }
+</style>
+</head>
+<body>
+<main class="lesson">
+
+  <p class="eyebrow">Lesson 03 &middot; <a href="../MISSION.md">Distilling the summarizer</a></p>
+
+  <h1>Reading a loss curve
+    <span class="sub">Both arms' training loss fell. Both arms' validation loss rose. The
+    arm that fell <em>lowest</em> is the one you must not ship.</span>
+  </h1>
+
+  <p class="lede">
+    You now have two trained adapters and a training log. By the end of this lesson you
+    will be able to read that log and say, before running any evaluation, which arm is
+    better and roughly <em>how</em> the worse one is broken — and you will know which
+    number in the log is evidence and which is decoration.
+  </p>
+
+  <h2><span class="num">01</span> What the run actually was</h2>
+
+  <p>
+    Both arms are the same base, the same adapter shape, the same schedule, the same
+    seed. They differ in one thing: the second half of the training file. This is
+    <a href="../DESIGN.md">D6</a> as it was built.
+  </p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th></th><th>blend</th><th>control</th></tr></thead>
+      <tbody>
+        <tr><td>rows</td><td>284</td><td>284</td></tr>
+        <tr><td>&nbsp;&nbsp;first 142</td><td>reference summaries</td><td>reference summaries</td></tr>
+        <tr><td>&nbsp;&nbsp;second 142</td><td><strong>teacher summaries</strong></td><td>reference summaries again</td></tr>
+        <tr><td>distinct calls behind those rows</td><td>142</td><td>142</td></tr>
+        <tr><td>steps / epoch &middot; total</td><td>36 &middot; 108</td><td>36 &middot; 108</td></tr>
+        <tr><td>wall clock on the pod</td><td>5.7 min</td><td>5.7 min</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    Everything else is shared and deliberately so — <code>r=16</code>,
+    <code>lora_alpha=32</code>, dropout 0.05, <code>all-linear</code> over twelve module
+    types, 2e-4 cosine with 5 warmup steps, batch 1 with gradient accumulation 8, three
+    epochs, seed 0. The twelve targets are worth one glance, because five of them are not
+    attention: <code>q/k/v/o_proj</code> and the MLP trio, plus
+    <code>in_proj_a</code>, <code>in_proj_b</code>, <code>in_proj_qkv</code>,
+    <code>in_proj_z</code> and <code>out_proj</code> — the state projections of the 18
+    Gated DeltaNet layers. On a hybrid like Qwen3.5 those carry the recursion, so leaving
+    them frozen would have fine-tuned the model while leaving its memory alone.
+  </p>
+
+  <h2><span class="num">02</span> Two numbers, two different questions</h2>
+
+  <p>
+    A training loop hands you two numbers and they are not the same kind of thing.
+    <strong>Training loss</strong> is the objective being minimised right now, over the
+    rows in front of it. It can always be driven down, because the model is allowed to
+    memorise. <strong>Validation loss</strong> is the same measurement on 12 calls the
+    adapter has never seen. It is the only one of the two that is even trying to answer
+    "will this be any good on call 292?".
+  </p>
+
+  <p>
+    The skill is not knowing that. The skill is knowing which of them is allowed to
+    change your mind, and what a <em>difference between two arms</em> means when both
+    arms are reading the same 12 rows.
+  </p>
+
+  <figure>
+    <svg viewBox="0 0 640 350" role="img"
+         aria-label="Two stacked panels over three epochs on a shared 0 to 2.4 loss scale. Top panel, training loss: both arms fall, the control falling furthest, from about 1.67 to 0.27, while the blend falls from about 1.48 to 0.61. Bottom panel, validation loss: the blend arm stays nearly flat around 1.58 to 1.71 while the control arm rises steadily from about 1.63 to 2.33.">
+      <!-- ---------- panel A: train ---------- -->
+      <text class="c-h" x="70" y="20">train loss</text>
+      <text class="c-sub" x="152" y="20">what the optimizer is minimising</text>
+
+      <line class="c-grid" x1="70" y1="58.4"  x2="450" y2="58.4"/>
+      <line class="c-grid" x1="70" y1="81.3"  x2="450" y2="81.3"/>
+      <line class="c-grid" x1="70" y1="104.2" x2="450" y2="104.2"/>
+      <line class="c-grid" x1="70" y1="127.1" x2="450" y2="127.1"/>
+      <text class="c-t" x="64" y="62"  text-anchor="end">2.0</text>
+      <text class="c-t" x="64" y="85"  text-anchor="end">1.5</text>
+      <text class="c-t" x="64" y="108" text-anchor="end">1.0</text>
+      <text class="c-t" x="64" y="131" text-anchor="end">0.5</text>
+      <text class="c-t" x="64" y="154" text-anchor="end">0.0</text>
+      <line class="c-grid" x1="110" y1="40" x2="110" y2="150"/>
+      <line class="c-grid" x1="280" y1="40" x2="280" y2="150"/>
+      <line class="c-grid" x1="450" y1="40" x2="450" y2="150"/>
+      <line class="c-axis" x1="70" y1="150" x2="450" y2="150"/>
+
+      <polyline class="c-ctrl"  points="110,73.2 280,116.0 450,137.6"/>
+      <polyline class="c-blend" points="110,82.3 280,109.5 450,122.2"/>
+      <circle class="c-dc" cx="110" cy="73.2"  r="3.4"/>
+      <circle class="c-dc" cx="280" cy="116.0" r="3.4"/>
+      <circle class="c-dc" cx="450" cy="137.6" r="3.4"/>
+      <circle class="c-db" cx="110" cy="82.3"  r="3.4"/>
+      <circle class="c-db" cx="280" cy="109.5" r="3.4"/>
+      <circle class="c-db" cx="450" cy="122.2" r="3.4"/>
+      <text class="c-lb" x="460" y="126">blend</text>
+      <text class="c-lc" x="460" y="141">control</text>
+
+      <!-- ---------- panel B: val ---------- -->
+      <text class="c-h" x="70" y="182">validation loss</text>
+      <text class="c-sub" x="166" y="182">12 calls neither arm has seen</text>
+
+      <line class="c-grid" x1="70" y1="208.4" x2="450" y2="208.4"/>
+      <line class="c-grid" x1="70" y1="231.3" x2="450" y2="231.3"/>
+      <line class="c-grid" x1="70" y1="254.2" x2="450" y2="254.2"/>
+      <line class="c-grid" x1="70" y1="277.1" x2="450" y2="277.1"/>
+      <text class="c-t" x="64" y="212" text-anchor="end">2.0</text>
+      <text class="c-t" x="64" y="235" text-anchor="end">1.5</text>
+      <text class="c-t" x="64" y="258" text-anchor="end">1.0</text>
+      <text class="c-t" x="64" y="281" text-anchor="end">0.5</text>
+      <text class="c-t" x="64" y="304" text-anchor="end">0.0</text>
+      <line class="c-grid" x1="110" y1="190" x2="110" y2="300"/>
+      <line class="c-grid" x1="280" y1="190" x2="280" y2="300"/>
+      <line class="c-grid" x1="450" y1="190" x2="450" y2="300"/>
+      <line class="c-axis" x1="70" y1="300" x2="450" y2="300"/>
+
+      <polyline class="c-ctrl"  points="110,225.2 280,212.2 450,193.4"/>
+      <polyline class="c-blend" points="110,227.6 280,226.8 450,221.7"/>
+      <circle class="c-dc" cx="110" cy="225.2" r="3.4"/>
+      <circle class="c-dc" cx="280" cy="212.2" r="3.4"/>
+      <circle class="c-dc" cx="450" cy="193.4" r="3.4"/>
+      <circle class="c-db" cx="110" cy="227.6" r="3.4"/>
+      <circle class="c-db" cx="280" cy="226.8" r="3.4"/>
+      <circle class="c-db" cx="450" cy="221.7" r="3.4"/>
+      <text class="c-lb" x="460" y="226">blend</text>
+      <text class="c-lc" x="460" y="197">control</text>
+      <text class="c-hi" x="460" y="212">rising</text>
+
+      <text class="c-t" x="110" y="322" text-anchor="middle">1</text>
+      <text class="c-t" x="280" y="322" text-anchor="middle">2</text>
+      <text class="c-t" x="450" y="322" text-anchor="middle">3</text>
+      <text class="c-t" x="280" y="341" text-anchor="middle">epoch</text>
+    </svg>
+    <figcaption>
+      The same run, both arms, one y scale — read down the columns and the two panels say
+      opposite things. Training loss falls in both arms and falls <em>further</em> in the
+      control; validation loss rises in both arms and rises <em>four times faster</em> in
+      the control. Each training point is the mean of the last ten steps' micro-batches, so
+      an epoch is three or four windows rather than a true epoch mean, and the first window
+      starts at step 10 — a logging artefact, not a model property.
+    </figcaption>
+  </figure>
+
+  <h2><span class="num">03</span> Reading it</h2>
+
+  <p>
+    Here is the same data as numbers, with the gap between the two panels written down,
+    because the gap is the quantity that means something.
+  </p>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>epoch</th><th>train &middot; blend</th><th>val &middot; blend</th><th>gap</th>
+            <th>train &middot; control</th><th>val &middot; control</th><th>gap</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>1</td><td>1.476</td><td>1.579</td><td>+0.10</td><td>1.675</td><td>1.633</td><td>&minus;0.04</td></tr>
+        <tr><td>2</td><td>0.883</td><td>1.597</td><td>+0.71</td><td>0.742</td><td>1.916</td><td>+1.17</td></tr>
+        <tr><td>3</td><td>0.606</td><td>1.709</td><td><strong>+1.10</strong></td><td>0.270</td><td>2.326</td><td><strong>+2.06</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    Three things follow, and only the third one is the lesson.
+  </p>
+
+  <p>
+    <strong>First, epoch 1 is clean.</strong> Neither arm has overfit yet — the control's
+    gap is even slightly negative. Overfitting is not a property of small datasets; it is
+    a thing that happens over steps, and this run gives you one epoch of "not yet".
+  </p>
+
+  <p>
+    <strong>Second, the learning rate does not explain the rise.</strong> The schedule is
+    cosine from 2e-4 down to 0, so the updates shrink monotonically. Anything driven by
+    step size should be settling, not climbing. Validation loss climbing under a decaying
+    schedule is the model moving toward the 142 calls it was shown and away from the
+    other ones.
+  </p>
+
+  <p>
+    <strong>Third — the actual lesson — the arm with the better training loss is the worse
+    model.</strong> By epoch 3 the control has memorised harder than the blend by any
+    measure (0.270 against 0.606) and is further from useful on unseen calls by a factor
+    of two (gap 2.06 against 1.10). Training loss is not a weaker version of the number
+    you want. On this task it <em>anti</em>-correlates with it, and a run where you only
+    logged the training curve would have told you to prefer the control.
+  </p>
+
+  <h2><span class="num">04</span> Why the difference between arms is readable</h2>
+
+  <p>
+    Either curve alone is ambiguous. 12 validation records is a small sample, and a single
+    seed gives you no error bars at all — the rise could be noise. What rescues the reading
+    is that both arms are measured on the same 12 rows with the same tokenizer, the same
+    step count and the same schedule, so whatever noise is in those rows is in both
+    curves, and the systematic part left over is the only thing that differs: what the
+    second half of the training file contained.
+  </p>
+
+  <p>
+    That is the argument for a control arm at all, and it is also why the control had to be
+    the same <em>size</em> (284 rows) rather than the same <em>content</em> — with only 142
+    training calls, a reference-only arm that did not repeat itself was not available.
+  </p>
+
+  <div class="note note--warn">
+    <div class="note__label">The rival explanation, stated rather than buried</div>
+    <p>
+      Equal volume is not equal diversity. The control sees 284 rows drawn from 142
+      distinct calls, so it meets each reference twice per epoch, while the blend meets
+      each reference once and each teacher summary once. The control's faster memorisation
+      is therefore <em>also</em> consistent with "it simply saw less variety", and this
+      design cannot separate that from "teacher supervision regularised it". What the
+      comparison does license is the narrower claim: teacher-plus-reference supervision
+      beat reference supervision alone at matched volume and matched step count. The arm
+      that would settle the rest — reference-only over twice as many distinct calls —
+      needs 284 labelled calls, and this project has 154.
+    </p>
+  </div>
+
+  <h2><span class="num">05</span> What the curve predicted</h2>
+
+  <p>
+    The evaluation had not been run when that table was read, and the curve made a
+    concrete prediction: the control had memorised the <em>contents</em> of 142 reference
+    summaries without learning much about which facts a summary should contain, so on a new
+    call it should produce confident detail that is not in the transcript. That is
+    checkable, and the <a href="0004-evaluate-honestly.html">next lesson</a> checks it. The
+    headline, measured over all 144 benchmark calls:
+  </p>
+
+  <div class="kv">
+    <div class="kv__row"><div class="kv__k">Ungrounded names &middot; blend</div><div class="kv__v">46, over 30 calls</div></div>
+    <div class="kv__row"><div class="kv__k">Ungrounded names &middot; control</div><div class="kv__v">512, over 45 calls</div></div>
+    <div class="kv__row"><div class="kv__k">Reference ROUGE-1 &middot; blend</div><div class="kv__v">0.4399</div></div>
+    <div class="kv__row"><div class="kv__k">Reference ROUGE-1 &middot; control</div><div class="kv__v">0.4176</div></div>
+  </div>
+
+  <p>
+    The prediction held, in kind and in direction: the control does invent names that are
+    not in the call, and it does so on more calls than the blend. But 443 of those 512 are
+    <strong>one call</strong> — <code>116308713889</code>, a repetition loop that emitted
+    <code>Roy</code> and <code>Royalty</code> 443 times over 456 words, with a duplicate
+    rate of 0.97. So the honest magnitude is not 11×: take that call out and the control is
+    69 names across 44 calls against the blend's 46 across 30, which is about
+    <strong>1.5×</strong>.
+  </p>
+
+  <p>
+    That correction is the last thing this lesson has to teach, and it is why the two
+    numbers belong side by side. An aggregate you have not decomposed will sell you an 11×
+    effect that is really one broken decode wearing 144 calls as a disguise. The curve
+    predicted the <em>kind</em> of failure precisely; the <em>size</em> of it was a single
+    call, and only the per-call field could tell you which. Lesson 04 does that
+    decomposition properly, on every metric at once.
+  </p>
+
+  <h2><span class="num">06</span> Do it yourself</h2>
+
+  <div class="exercise">
+    <div class="exercise__label">Exercise &middot; 5 minutes, before you read lesson 04</div>
+    <p>
+      You have the log and the two adapters. Copy
+      <code>finetune/logs_arms.log</code> somewhere you can edit it, and before opening the
+      evaluation, write down three things:
+    </p>
+    <ol>
+      <li>Which arm you would ship, and the one number from the log you are leaning on.</li>
+      <li>Which of the six eval columns in <code>student_scores.json</code> you expect to
+          separate the arms most, and roughly by how much.</li>
+      <li>The prediction the curve makes about <em>how</em> the worse arm fails — in a
+          sentence specific enough to be wrong.</li>
+    </ol>
+    <p class="expected">
+      <strong>What to compare against.</strong> A prediction is only useful if it can fail.
+      The third item is the one that matters: "the control will score worse" is not a
+      prediction, because you already know it. "The control will invent entities it
+      memorised from other calls" is — and it is falsifiable in
+      <code>ungrounded_names</code>, which is a per-call field, so you can also check
+      <em>which</em> calls it fails on rather than only the total.
+    </p>
+  </div>
+
+  <div class="quiz">
+    <h3>Check yourself</h3>
+
+    <div class="q" data-fb="That is what a falling training loss licenses here, and only that. It is the number the optimizer was pointed at, on the rows it could see, and it is minimised most efficiently by fitting those rows hardest.">
+      <p class="q__text">Both arms' training loss fell. What does the fall show?</p>
+      <div class="opts">
+        <button class="opt" data-correct>It shows the control memorised the training calls best.</button>
+        <button class="opt">It shows the control generalised to new calls best.</button>
+        <button class="opt">It shows the arms received different volumes of data.</button>
+        <button class="opt">It shows the blend arm was trained for fewer steps.</button>
+      </div>
+      <p class="q__fb"></p>
+    </div>
+
+    <div class="q" data-fb="Both arms had 284 rows and 108 steps, so volume and step count were matched by design. What could not be matched was variety: the control's 284 rows come from 142 calls, so each reference is seen twice per epoch, and 'it memorised faster' is confounded with 'it saw less variety'.">
+      <p class="q__text">What did the control arm <em>not</em> match about the blend?</p>
+      <div class="opts">
+        <button class="opt" data-correct>The number of distinct underlying training calls.</button>
+        <button class="opt">The number of optimisation steps each arm took.</button>
+        <button class="opt">The number of examples and their total tokens.</button>
+        <button class="opt">The learning rate schedule and the warmup steps.</button>
+      </div>
+      <p class="q__fb"></p>
+    </div>
+
+    <div class="q" data-fb="A model that memorised 142 specific reference summaries has learned that a summary contains specific names, and on a call it has never seen it supplies names it saw elsewhere. The eval counts exactly this, per call, and the control does it on more calls than the blend does — though most of the raw total turns out to be one repetition loop, which is the trap §05 decomposes.">
+      <p class="q__text">What did the validation curve predict about the control?</p>
+      <div class="opts">
+        <button class="opt" data-correct>It would name entities not in the call.</button>
+        <button class="opt">It would return empty output on long calls.</button>
+        <button class="opt">It would copy transcript spans out verbatim.</button>
+        <button class="opt">It would end summaries in the middle of sentences.</button>
+      </div>
+      <p class="q__fb"></p>
+    </div>
+
+    <div class="quiz__score"></div>
+  </div>
+
+  <h2><span class="num">07</span> Primary source</h2>
+
+  <ul class="sources">
+    <li>
+      <a href="https://karpathy.github.io/2019/04/25/recipe/" target="_blank" rel="noopener">Karpathy — <em>A Recipe for Training Neural Networks</em></a> (2019).
+      <span class="why">The primary source for §02 and §04. Its first instruction is to become one with the data and
+      set a dumb baseline, and its central habit is exactly the one this lesson teaches: predict what the loss curve
+      will do <em>before</em> you look at it, so that a surprise is information. Read it for the discipline of
+      treating a training run as an experiment you have to have an opinion about.</span>
+    </li>
+    <li>
+      <a href="https://arxiv.org/abs/1611.03530" target="_blank" rel="noopener">Zhang, Bengio, Hardt, Recht &amp; Vinyals — <em>Understanding Deep Learning Requires Rethinking Generalization</em></a> (ICLR 2017).
+      <span class="why">The extreme version of §03: models that fit random labels perfectly still train to zero loss,
+      which is why "it converged" and "it will work" are separate claims. Read it when you want to know how far
+      train loss can be from usefulness in principle.</span>
+    </li>
+    <li>
+      <a href="0002-audit-the-teacher.html">Lesson 02 — Audit the teacher</a>.
+      <span class="why">The other half of the training file: which labels the teacher supplied, and the two
+      degenerate ones that had to be regenerated before this run could be trustworthy.</span>
+    </li>
+  </ul>
+
+  <h2><span class="num">08</span> Where this sits</h2>
+
+  <ul class="roadmap">
+    <li><span class="n">01</span><span class="t">Text, not logits</span><span class="d">Sequence-level distillation, and why the two tokenizers force it.</span></li>
+    <li><span class="n">02</span><span class="t">Audit the teacher</span><span class="d">The cap is a failure detector, not a length limit &mdash; and one failure is invisible to reading.</span></li>
+    <li class="is-current"><span class="n">03</span><span class="t">Reading a loss curve</span><span class="d">LoRA on the audited blend, against a control, and reading a loss curve honestly.</span></li>
+    <li><span class="n">04</span><span class="t">Evaluate honestly</span><span class="d">Paired bootstrap, teacher agreement, and reporting where the student is worse.</span></li>
+    <li><span class="n">05</span><span class="t">Ship it, then check</span><span class="d">Quantization, four numbers that were reported fields rather than measurements, and how to tell precision from engine and draw.</span></li>
+    <li><span class="n">06</span><span class="t">The knob you never turned</span><span class="d">A decoding flag that cut invented names by a third, the tie it hid behind, and why a difference of totals is not a difference on your call.</span></li>
+  </ul>
+
+  <p>
+    The four quantities this lesson turns on — <em>training loss</em>, <em>validation
+    loss</em>, <em>generalization gap</em> and <em>overfitting</em> — now have entries with
+    this run's measured numbers in the
+    <a href="../reference/distillation-glossary.html">distillation glossary</a>, under
+    "Reading a training run". That is the page to return to when the terms blur; this
+    lesson is the place they were earned.
+  </p>
+
+  <aside class="ask">
+    <div class="ask__label">Ask me</div>
+    <p>
+      I am your teacher for this, so bring me anything unclear. Good questions from here:
+      <em>should this run have stopped at epoch 1, when validation loss was still flat?</em>
+      (early stopping, and why the answer depends on what you are selecting for),
+      <em>why did the blend's validation loss flatten instead of falling?</em>, and
+      <em>what would a learning-rate sweep or a lower rank have changed?</em> If you want a
+      broader opinion than mine, the practitioners comparing notes on exactly this shape of
+      LoRA run are on the Unsloth Discord and the Hugging Face forums.
+    </p>
+  </aside>
+
+  <footer class="lesson-foot">
+    <p>
+      Lesson 03 of the distillation build. Grounded in <code>finetune/logs_arms.log</code>
+      (the full console trace of both arms), <code>finetune/adapters/student-lora-blend/run.json</code>
+      and <code>finetune/adapters/student-lora-control/run.json</code>, and the evaluated scores in
+      <code>finetune/student_scores.json</code>. Every number on this page is read from those
+      files or computed from them; no curve is illustrative.
+    </p>
+    <p><a href="0002-audit-the-teacher.html">← Lesson 02</a></p>
+  </footer>
+
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

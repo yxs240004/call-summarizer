@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 04 — Evaluate honestly</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+<link rel="stylesheet" href="../assets/lesson.css">
+<style>
+/* Figure-local classes. Colours come from lesson.css tokens, so both themes work. */
+.fig{ margin:1.9rem 0 }
+.fig svg{ display:block; width:100%; height:auto; max-width:100% }
+.c-axis{ stroke:var(--rule-2); stroke-width:1 }
+.c-tick{ stroke:var(--rule-2); stroke-width:1 }
+.c-zero{ stroke:var(--rule-2); stroke-width:1; stroke-dasharray:3 3 }
+.c-name{ fill:var(--ink); font-family:var(--display); font-size:12.5px; font-weight:600; text-anchor:end }
+.c-val{ fill:var(--ink-soft); font-family:var(--mono); font-size:10px; text-anchor:end }
+.c-ticklabel{ fill:var(--muted); font-family:var(--mono); font-size:10px; text-anchor:middle }
+.c-iv{ fill:none; stroke-width:2.5 }
+.c-cap{ stroke-width:2.5 }
+.c-iv--accent, .c-cap--accent{ stroke:var(--accent) }
+.c-iv--muted, .c-cap--muted{ stroke:var(--muted) }
+.c-iv--stop, .c-cap--stop{ stroke:var(--stop) }
+.c-mean{ stroke:var(--paper); stroke-width:1.5 }
+.c-mean--accent{ fill:var(--accent) }
+.c-mean--muted{ fill:var(--muted) }
+.c-mean--stop{ fill:var(--stop) }
+.c-flag{ fill:var(--ink-soft); font-family:var(--mono); font-size:10px }
+</style>
+</head>
+<body>
+<main class="lesson">
+
+  <p class="eyebrow">Lesson 04 &middot; <a href="../MISSION.md">Distillation</a></p>
+
+  <h1>Evaluate honestly <span class="sub">The student ties the 4B. It loses to its own teacher &mdash; by a margin that is small, real, and reportable.</span></h1>
+
+  <p class="lede">
+    Lesson 03 read the loss curves. This lesson reads the scores. The first thing to
+    notice is that a table of six mean ROUGE-1 values cannot answer a single one of the
+    questions you actually have about them.
+  </p>
+
+  <h2><span class="num">01</span> Six variants, one scorer, 144 calls</h2>
+
+  <p>
+    Everything below comes from one scored run: <strong>144</strong> deliverable calls, each
+    summarised by six systems and each scored against the same human-written reference
+    summary, by one scorer, in one pass. That shared frame is what makes the columns
+    comparable at all &mdash; a ROUGE-1 value means nothing except relative to the reference
+    it was measured against.
+  </p>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>variant</th><th>ROUGE-1</th><th>words</th><th>copy rate</th>
+            <th>mid-sentence ends</th><th>empty</th><th>ungrounded names</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>BART (extractive baseline)</td><td>0.2007</td><td>35.4</td><td>0.145</td><td>47</td><td>0</td><td>1</td></tr>
+        <tr><td>Qwen3-4B</td><td>0.4410</td><td>156.9</td><td>0.007</td><td>1</td><td>0</td><td>47</td></tr>
+        <tr><td>Qwen3-8B, untuned</td><td>0.4372</td><td>166.0</td><td>0.009</td><td>6</td><td>0</td><td>107</td></tr>
+        <tr><td>Qwen3-8B LoRA &mdash; the teacher</td><td><strong>0.4784</strong></td><td>140.4</td><td>0.006</td><td>0</td><td>0</td><td>109</td></tr>
+        <tr><td><strong>student &mdash; blend</strong></td><td><strong>0.4399</strong></td><td>141.2</td><td>0.009</td><td>0</td><td>0</td><td>46</td></tr>
+        <tr><td>student &mdash; control</td><td>0.4176</td><td>125.5</td><td>0.007</td><td>1</td><td>0</td><td>512</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    Mean reference length is 151.9 words, so every Qwen-family variant is in the right
+    length neighbourhood, and BART is not: it copies sentences out of the transcript, which
+    is why its mid-sentence-end count is 47 and its copy rate is 20&times; everyone else's.
+    BART is in the table as a floor, not as a competitor.
+  </p>
+
+  <p>
+    Read the table the way it is usually read and you get an ordering and nothing else:
+    teacher 0.4784, then 4B 0.4410, blend 0.4399, untuned-8B 0.4372, control 0.4176, BART
+    0.2007. Is the blend's 0.4399 against the 4B's 0.4410 a loss? A win? Nothing in the
+    table says, and there is no way to find out by staring harder. Those six numbers are
+    <em>means over 144 calls</em>, and the calls are not interchangeable.
+  </p>
+
+  <aside class="ask">
+    <div class="ask__label">Ask me</div>
+    <p>
+      Six means, and I have not told you the spread. Ask me for the distribution of any one
+      column &mdash; the teacher's worst call, the blend's worst call, or how many of the 144
+      calls each variant wins outright &mdash; and I will pull it out of
+      <code>finetune/student_scores.json</code>.
+    </p>
+  </aside>
+
+  <h2><span class="num">02</span> Pair the calls, or measure nothing</h2>
+
+  <p>
+    Some of these 144 calls are easy: two speakers, a clear ask, a decision at the end.
+    Others are four speakers, three topics, and a transcript that starts mid-sentence. A
+    variant's mean ROUGE is therefore partly a statement about <em>which calls it saw</em>.
+    Here every variant saw all 144, so the call population is held fixed &mdash; but that does
+    not help a naive comparison, because the call's difficulty still sits inside each mean,
+    adding variance to both.
+  </p>
+
+  <p>
+    The fix is to compare per call. Take the 144 differences
+    <code>rouge1(blend) &minus; rouge1(control)</code>, one per call. Now the call's difficulty
+    is in both terms of the subtraction, so it cancels: an easy call contributes a small
+    difference, a hard call contributes a small difference, and what remains is the
+    systematic part. Then resample the 144 calls with replacement, ten thousand times,
+    recomputing the mean difference each time, and read the interval off the middle 95% of
+    those resamples. This is the <strong>paired bootstrap</strong>.
+  </p>
+
+  <p>
+    The rule that makes it useful:
+    <strong>if the interval contains zero, the difference is not distinguishable from noise
+    at this sample size.</strong> That is not a claim that the two systems are equal &mdash; only
+    that 144 calls cannot tell them apart.
+  </p>
+
+  <div class="exercise">
+    <div class="exercise__label">Run it yourself</div>
+    <h3>Recompute the one comparison everything else hangs on</h3>
+    <p>
+      You do not have to take my intervals on trust. The bootstrap is twenty lines of
+      standard library, and the per-call scores are already sitting in the harness output.
+      From <code>finetune/</code>:
+    </p>
+<pre><code>import json, random, statistics
+
+rows = json.load(open("student_scores.json", encoding="utf-8"))["rows"]
+blend   = {r["call_id"]: r["scores"]["rouge1"] for r in rows["student_blend"]}
+control = {r["call_id"]: r["scores"]["rouge1"] for r in rows["student_control"]}
+
+delta = [blend[c] - control[c] for c in sorted(blend)]        # paired, per call
+rng = random.Random(0)
+means = sorted(statistics.fmean(rng.choices(delta, k=len(delta))) for _ in range(10_000))
+
+lo, hi = means[250], means[9749]                              # 2.5th and 97.5th
+wins = sum(d &gt; 0 for d in delta)
+print(f"mean {statistics.fmean(delta):+.4f}  CI [{lo:+.4f}, {hi:+.4f}]  W{wins}/L{len(delta) - wins}")</code></pre>
+    <p>
+      You should land on <code>mean +0.0223 CI [+0.0087, +0.0365] W84/L60</code>: the student
+      is ahead of the control by about two ROUGE-1 points, and the interval does not
+      contain zero. Swap the two dicts' order and every sign flips, which is the sanity
+      check that you have actually paired the calls rather than pooled them &mdash; pooling
+      throws the pairing away and gives you a wider interval for the same data.
+    </p>
+  </div>
+
+  <h2><span class="num">03</span> Four comparisons, four shapes</h2>
+
+  <p>
+    That is one comparison. The four worth having are below, each a paired bootstrap over
+    the same 144 calls. W/L is the raw per-call win and loss count &mdash; and it is the column
+    that will mislead you if you let it.
+  </p>
+
+  <figure class="fig">
+    <svg viewBox="0 0 640 370" role="img" aria-label="Four paired comparisons of ROUGE-1, drawn as 95% confidence intervals on a shared axis running from minus 0.06 to plus 0.045, with a dashed line at zero. blend minus control: mean plus 0.0223, interval plus 0.0087 to plus 0.0365, entirely right of zero, 84 wins and 60 losses. qwen4b minus blend: mean plus 0.0011, interval minus 0.0112 to plus 0.0134, crossing zero, 81 wins and 63 losses. blend minus honest: mean plus 0.0027, interval minus 0.0100 to plus 0.0160, crossing zero, 71 wins, 72 losses, 1 tie. blend minus teacher: mean minus 0.0385, interval minus 0.0518 to minus 0.0258, entirely left of zero, 42 wins and 102 losses.">
+      <line class="c-axis" x1="150" y1="335" x2="630" y2="335"/>
+      <line class="c-tick" x1="194.8" y1="335" x2="194.8" y2="341"/>
+      <line class="c-tick" x1="329.0" y1="335" x2="329.0" y2="341"/>
+      <line class="c-tick" x1="418.6" y1="335" x2="418.6" y2="341"/>
+      <line class="c-tick" x1="508.1" y1="335" x2="508.1" y2="341"/>
+      <line class="c-tick" x1="597.6" y1="335" x2="597.6" y2="341"/>
+      <text class="c-ticklabel" x="194.8" y="352">&minus;0.05</text>
+      <text class="c-ticklabel" x="329.0" y="352">&minus;0.02</text>
+      <text class="c-ticklabel" x="418.6" y="352">0</text>
+      <text class="c-ticklabel" x="508.1" y="352">+0.02</text>
+      <text class="c-ticklabel" x="597.6" y="352">+0.04</text>
+
+      <line class="c-zero" x1="418.6" y1="70" x2="418.6" y2="335"/>
+
+      <text class="c-name" x="142" y="92">blend &minus; control</text>
+      <text class="c-val" x="142" y="107">+0.0223 &middot; 84W / 60L</text>
+      <line class="c-iv c-iv--accent" x1="457.5" y1="95" x2="582.0" y2="95"/>
+      <line class="c-cap c-cap--accent" x1="457.5" y1="90" x2="457.5" y2="100"/>
+      <line class="c-cap c-cap--accent" x1="582.0" y1="90" x2="582.0" y2="100"/>
+      <circle class="c-mean c-mean--accent" cx="518.4" cy="95" r="5"/>
+
+      <text class="c-name" x="142" y="162">qwen4b &minus; blend</text>
+      <text class="c-val" x="142" y="177">+0.0011 &middot; 81W / 63L</text>
+      <line class="c-iv c-iv--muted" x1="368.4" y1="165" x2="478.6" y2="165"/>
+      <line class="c-cap c-cap--muted" x1="368.4" y1="160" x2="368.4" y2="170"/>
+      <line class="c-cap c-cap--muted" x1="478.6" y1="160" x2="478.6" y2="170"/>
+      <circle class="c-mean c-mean--muted" cx="423.5" cy="165" r="5"/>
+      <text class="c-flag" x="488" y="169">crosses zero</text>
+
+      <text class="c-name" x="142" y="232">blend &minus; honest</text>
+      <text class="c-val" x="142" y="247">+0.0027 &middot; 71W / 72L / 1T</text>
+      <line class="c-iv c-iv--muted" x1="373.8" y1="235" x2="490.2" y2="235"/>
+      <line class="c-cap c-cap--muted" x1="373.8" y1="230" x2="373.8" y2="240"/>
+      <line class="c-cap c-cap--muted" x1="490.2" y1="230" x2="490.2" y2="240"/>
+      <circle class="c-mean c-mean--muted" cx="430.7" cy="235" r="5"/>
+      <text class="c-flag" x="500" y="239">crosses zero</text>
+
+      <text class="c-name" x="142" y="302">blend &minus; teacher</text>
+      <text class="c-val" x="142" y="317">&minus;0.0385 &middot; 42W / 102L</text>
+      <line class="c-iv c-iv--stop" x1="186.7" y1="305" x2="303.1" y2="305"/>
+      <line class="c-cap c-cap--stop" x1="186.7" y1="300" x2="186.7" y2="310"/>
+      <line class="c-cap c-cap--stop" x1="303.1" y1="300" x2="303.1" y2="310"/>
+      <circle class="c-mean c-mean--stop" cx="246.2" cy="305" r="5"/>
+    </svg>
+    <figcaption>
+      Four paired comparisons over the same 144 calls. Each bar is the 95% percentile
+      bootstrap interval on the mean per-call ROUGE-1 difference; the dot is the mean.
+      <strong>Teal</strong>: the whole interval sits right of zero &mdash; a real improvement.
+      <strong>Red</strong>: the whole interval sits left of zero &mdash; a real deficit.
+      <strong>Grey</strong>: the interval crosses zero, so the difference is not
+      distinguishable from noise at this sample size.
+    </figcaption>
+  </figure>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>comparison</th><th>mean &Delta;R1</th><th>95% CI</th><th>W / L</th><th>verdict</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>blend &minus; control</td><td>+0.0223</td><td>[+0.0087, +0.0365]</td><td>84 / 60</td><td>real improvement</td></tr>
+        <tr><td>qwen4b &minus; blend</td><td>+0.0011</td><td>[&minus;0.0112, +0.0134]</td><td>81 / 63</td><td>tie</td></tr>
+        <tr><td>blend &minus; honest <em>(untuned 8B)</em></td><td>+0.0027</td><td>[&minus;0.0100, +0.0160]</td><td>71 / 72</td><td>tie</td></tr>
+        <tr><td>blend &minus; teacher</td><td>&minus;0.0385</td><td>[&minus;0.0518, &minus;0.0258]</td><td>42 / 102</td><td>real deficit</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    <strong>The row that will trip you up is the second one.</strong> The 4B beats the student
+    on 81 of 144 calls &mdash; a clear majority &mdash; and the paired test calls it a tie. Both
+    facts are correct. The student's 63 wins average <strong>+0.0521</strong> while its 63
+    losses average <strong>&minus;0.0645</strong>: it wins more often and loses bigger, and the
+    two cancel to +0.0011 with an interval straddling zero. A win count is not a mean, and
+    81/63 is not a result. Only when both the count <em>and</em> the average margin point the
+    same way &mdash; as in rows 1 and 4, where the blend's wins are larger than its losses and
+    the teacher's losses are larger than its wins &mdash; does the count tell you anything.
+  </p>
+
+  <p>
+    Row three is the flattest result on the page: 71&ndash;72 against the untuned 8B, on a
+    mean of +0.0027. Distillation bought the small student nothing measurable against its own
+    base model at 8B scale, and the honest reading is that the untuned 8B was already
+    summarising this corpus about as well as a 2B model can be taught to.
+  </p>
+
+  <h2><span class="num">04</span> Where the student is worse</h2>
+
+  <p>
+    The mission's bar is "almost as good as the teacher". The measured answer is
+    <strong>0.4399 against 0.4784</strong> &mdash; about <strong>92%</strong> of the teacher's
+    ROUGE-1, against a reference set neither model saw in training. That is the good news, and
+    it is real: the deployed model is genuinely close.
+  </p>
+
+  <p>
+    The rest of the answer is that the gap is <strong>not noise</strong>. The interval
+    [&minus;0.0518, &minus;0.0258] lies entirely below zero, and the teacher wins outright on
+    <strong>102 of 144</strong> calls. On <strong>29</strong> calls the student is more than
+    <strong>0.10</strong> behind. Its own distribution has a bad tail: 11 of the 144 calls
+    score below 0.25 ROUGE-1, with a minimum of 0.047, while the teacher's floor is 0.062 and
+    its median is 0.4628. So the honest sentence is:
+  </p>
+
+  <p>
+    <em>The student is a usable model that is measurably worse than its teacher, by a small
+    but real margin, with a thin tail of calls it handles badly.</em>
+  </p>
+
+  <p>
+    That sentence is worth more than the number in it, because it is the sentence a
+    deployment decision can be made from. "92% of the teacher" invites you to ship without
+    looking; "measurably worse, with a bad tail on 11 calls" tells you to go and read those
+    11 calls before you do.
+  </p>
+
+  <h2><span class="num">05</span> Two aggregates that lie</h2>
+
+  <p>
+    Two more numbers from the table above that mean less than they appear to, both in the
+    same way: an aggregate over 144 calls is not a description of 144 calls.
+  </p>
+
+  <h3>The control's 512 ungrounded names</h3>
+
+  <p>
+    512 versus the blend's 46 reads as an 11&times; failure of factuality, and it is one
+    call. Call <code>116308713889</code> degenerates into a <code>Roy</code>/<code>Royalty</code>
+    repetition loop: 456 words, duplicate rate 0.967, no sentence ending. It alone contributes
+    <strong>443</strong> of the 512. Drop it and the control has 69 ungrounded names across 44
+    calls, against the blend's 46 across 30 &mdash; about <strong>1.5&times;</strong>, on a
+    smaller output length. The real finding is modest (the control fabricates somewhat more),
+    and the spectacular one was a single broken decode wearing 144 calls' worth of authority.
+  </p>
+
+  <h3>The length story that isn't there</h3>
+
+  <p>
+    Reading a handful of bad outputs suggested the student fails by being too long or too
+    short. It does not. Output length correlates with reference length at <strong>+0.091</strong>
+    for the blend &mdash; and <strong>+0.081 for the teacher</strong>, <strong>+0.090</strong>
+    for the 4B, <strong>+0.014</strong> for the control. Nobody, including the model we are
+    treating as the target, tracks the reference's length. Mean absolute length error is 66.5
+    words for the blend against <strong>66.4 for the teacher</strong>. Length explains
+    <strong>r = 0.016</strong> of the teacher&ndash;blend gap, i.e. nothing. If you had gone
+    fixing length, you would have spent a week changing a number uncorrelated with the metric
+    you were trying to move.
+  </p>
+
+  <aside class="ask">
+    <div class="ask__label">Ask me</div>
+    <p>
+      Both of these were caught by decomposing an aggregate by call, and you can point me at
+      any suspicious number in the table and ask for the same treatment. "Which calls produce
+      the blend's 46 ungrounded names?" is the obvious next question; so is "what are the 11
+      calls under 0.25?"
+    </p>
+  </aside>
+
+  <h2><span class="num">06</span> What this cannot claim</h2>
+
+  <p>
+    Four limits, stated because the lesson is about evaluating honestly and a lesson that
+    only lists its wins is not doing that.
+  </p>
+
+  <ul>
+    <li>
+      <strong>There is no untuned-2B arm.</strong> The comparison that exists is blend versus
+      control: the same 284 training rows, the same steps, differing only in whether the second
+      half of the file is teacher summaries or the same references again. That licenses
+      "teacher supervision beat more reference supervision at matched volume". It does
+      <em>not</em> license "distillation beat the base model" &mdash; that arm was never run.
+    </li>
+    <li>
+      <strong>The blend confounds supervision with variety.</strong> The control's 284 rows come
+      from 142 calls seen twice; the blend's come from 142 references plus 142 teacher
+      summaries of the same calls. Volume, steps and seed are matched; the <em>diversity</em>
+      of what the model saw is not. Part of the +0.0223 may be variety rather than teacher
+      quality, and nothing in this run separates the two. This is
+      <a href="../DESIGN.md">D6</a>, and it is an unexcluded rival explanation, not a
+      footnote.
+    </li>
+    <li>
+      <strong>The scorer is not in this repository.</strong> It lives in the sibling
+      <code>call-summarizer/eval/</code> project, so the ordering above is reproducible here
+      but the absolute values are not &mdash; an independent unigram-overlap F1 reproduction
+      gives the same ordering about 0.03 lower. Treat the differences as the findings and the
+      levels as the scorer's dialect.
+    </li>
+    <li>
+      <strong>The model you would actually ship is still unmeasured.</strong> Every number here
+      is the LoRA adapter evaluated in 16-bit. The deployed artifact is the same weights at
+      Q4_K_M in a GGUF, and the instrument built to check the quantizer returns agreement with
+      a 16-bit reference at the <em>prefix</em> level &mdash; which any paraphrase fails. The
+      four-bit model's quality on these 144 calls has not been scored. That is the open item,
+      not a closed question.
+    </li>
+  </ul>
+
+  <h2><span class="num">07</span> Primary source</h2>
+
+  <ul class="sources">
+    <li><a href="https://aclanthology.org/W04-3250/">Philipp Koehn &mdash; <em>Statistical Significance Tests for Machine Translation Evaluation</em></a> (EMNLP 2004). <span class="why">The paper that introduced bootstrap confidence intervals and paired bootstrap resampling into this field. Read &sect;3 for the method (&sect;3.1 resampling, &sect;3.2 the paired variant) &mdash; it is six pages and every interval on this page is the procedure it describes, applied to ROUGE instead of BLEU.</span></li>
+    <li><a href="https://aclanthology.org/P18-1128/">Rotem Dror, Gili Baumer, Segev Shlomov &amp; Roi Reichart &mdash; <em>The Hitchhiker's Guide to Testing Statistical Significance in Natural Language Processing</em></a> (ACL 2018). <span class="why">The protocol paper, and the reason this lesson exists. It documents that in ACL and TACL 2017 papers significance testing is "often ignored or misused", then gives the decision tree for choosing a test. Read &sect;4 alongside &sect;2 &mdash; the misuse it describes is exactly the win-count trap in &sect;03 above.</span></li>
+  </ul>
+
+  <ul class="roadmap">
+    <li><span class="n">01</span><span class="t">Text, not logits</span><span class="d">Sequence-level distillation, and why the two tokenizers force it.</span></li>
+    <li><span class="n">02</span><span class="t">Audit the teacher</span><span class="d">The cap is a failure detector, not a length limit &mdash; and one failure is invisible to reading.</span></li>
+    <li><span class="n">03</span><span class="t">Reading a loss curve</span><span class="d">LoRA on the audited blend, against a control, and reading a loss curve honestly.</span></li>
+    <li class="is-current"><span class="n">04</span><span class="t">Evaluate honestly</span><span class="d">Paired bootstrap, teacher agreement, and reporting where the student is worse.</span></li>
+    <li><span class="n">05</span><span class="t">Ship it, then check</span><span class="d">Quantization, four numbers that were reported fields rather than measurements, and how to tell precision from engine and draw.</span></li>
+    <li><span class="n">06</span><span class="t">The knob you never turned</span><span class="d">A decoding flag that cut invented names by a third, the tie it hid behind, and why a difference of totals is not a difference on your call.</span></li>
+  </ul>
+
+  <p>
+    The vocabulary this lesson leans on &mdash; <em>paired bootstrap</em>, <em>confidence
+    interval</em>, <em>win/loss count</em>, <em>tail</em> &mdash; is defined with these runs'
+    numbers in the <a href="../reference/distillation-glossary.html">distillation glossary</a>.
+    The measured throughput of the deployed model on this laptop, and now its measured quality,
+    are in <a href="../RESOURCES.md">RESOURCES.md</a>; the deployment lesson that scores it is
+    <a href="0005-ship-it-then-check.html">Lesson 05</a>.
+  </p>
+
+  <div class="quiz">
+    <h3>Check yourself</h3>
+
+    <div class="q" data-fb="Pairing is the whole point. Because every variant was scored on the same 144 calls, subtracting per call cancels the call's difficulty out of the comparison and leaves the systematic difference. Resampling 144 differences also exploits the fact that the two scores are correlated — the paired interval is narrower than one built from two independent samples of the same size.">
+      <p class="q__text">You want to know whether the student beats the control on these 144 calls. Both were scored on the same calls. What is the right test?</p>
+      <div class="opts">
+        <button class="opt" data-correct>Bootstrap the 144 per-call differences between the two variants.</button>
+        <button class="opt">Bootstrap each variant's 144 scores on its own, separately.</button>
+        <button class="opt">Bootstrap all 288 scores pooled together into one sample.</button>
+        <button class="opt">Compare the two mean ROUGE-1 scores directly, without pairing.</button>
+      </div>
+      <p class="q__fb"></p>
+    </div>
+
+    <div class="q" data-fb="Wins and losses are counts; the test is on means. The student's 63 wins average +0.0521 and its 63 losses average −0.0645, so a majority of wins still sums to about zero. This is the trap Dror et al. describe as misusing significance tests: quoting the direction of the majority instead of the size of the effect.">
+      <p class="q__text">Qwen3-4B wins 81 of the 144 paired calls against the student, yet the paired bootstrap calls the difference a tie. How?</p>
+      <div class="opts">
+        <button class="opt" data-correct>Its 81 wins are smaller than its 63 losses</button>
+        <button class="opt">Its 81 wins all landed on the easiest calls</button>
+        <button class="opt">Its 81 wins used a different decoding seed than before</button>
+        <button class="opt">Its 81 wins mean the bootstrap ran too few resamples</button>
+      </div>
+      <p class="q__fb"></p>
+    </div>
+
+    <div class="q" data-fb="443 of the control's 512 ungrounded names come from one degenerate decode — a Roy/Royalty repetition loop with a duplicate rate of 0.967. Dropping that single call brings the ratio from 11× to about 1.5×. Any count aggregated over 144 calls can be one broken row; decompose it by call before you quote it.">
+      <p class="q__text">An aggregate reports the control fabricating 512 ungrounded names against the student's 46. What is the first thing to do?</p>
+      <div class="opts">
+        <button class="opt" data-correct>Check whether one degenerate decode dominates the control's total</button>
+        <button class="opt">Check whether the scorer counted names differently in each arm</button>
+        <button class="opt">Check whether both were scored on exactly the same calls</button>
+        <button class="opt">Check whether the reference summaries themselves contain those names</button>
+      </div>
+      <p class="q__fb"></p>
+    </div>
+
+    <div class="quiz__score"></div>
+  </div>
+
+  <aside class="ask">
+    <div class="ask__label">Ask me</div>
+    <p>
+      Statistics is the part of this mission people most often take on trust, and you should
+      not take it on trust from me either. If a claim on this page did not survive your own
+      re-run of the exercise in &sect;02, say so and we will work out which of us is wrong
+      before we build anything else on the interval.
+    </p>
+  </aside>
+
+  <footer class="lesson-foot">
+    <p>
+      Lesson 04 of the distillation build. Grounded in <code>finetune/student_scores.json</code>
+      (144 calls &times; 6 variants, with per-call ROUGE, word counts, duplicate and copy rates,
+      and ungrounded-name counts), the paired intervals in
+      <code>finetune/pair_distill_scores.json</code> and <code>finetune/pair_vs4b_scores.json</code>,
+      and the deployed-model timings in <code>finetune/local_samples.jsonl</code>. The four
+      intervals above were recomputed here from the per-call rows; the harness's own two agree
+      to within 0.0007. No number on this page is illustrative.
+    </p>
+    <p><a href="0003-reading-a-loss-curve.html">&larr; Lesson 03</a></p>
+  </footer>
+
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
